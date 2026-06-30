@@ -71,6 +71,12 @@ class TowerState:
             lowest_level=0,
             levels=CrazyClimberConstants.TOWER1
         )
+
+@chex.dataclass
+class FlowerpotEnemyState:
+    window_id: chex.Array
+    cycle_step: chex.Array
+    number_of_enemies: chex.Array
     
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
@@ -80,6 +86,8 @@ class CrazyClimberState(struct.PyTreeNode):
     player_move_state: PlayerMoveState
     tower_state: TowerState
     reached_apex: chex.Array
+    climbed_floors: chex.Array   # Number of floors climbed in the current life; reset to zero after death.
+    flowerpot_enemy: FlowerpotEnemyState
 
 class CrazyClimberObservation(struct.PyTreeNode):
     pass
@@ -226,6 +234,8 @@ class CrazyClimberConstants(struct.PyTreeNode):
         )
     )
 
+    MAX_FLOWERPOT_ENEMIES: int = struct.field(pytree_node=False, default=3)
+
 class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation, CrazyClimberInfo, CrazyClimberConstants]):
     ACTION_SET: jnp.ndarray = jnp.array(
         [Action.NOOP, Action.UP, Action.RIGHT, Action.LEFT, Action.DOWN, Action.UPRIGHT, Action.UPLEFT, Action.DOWNRIGHT, Action.DOWNLEFT],
@@ -239,6 +249,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> (CrazyClimberObservation, CrazyClimberState):
         state_key, _step_key = jax.random.split(key)
+        num_flowerpot_enemies = self.consts.MAX_FLOWERPOT_ENEMIES
         state = CrazyClimberState(
             key=state_key,
             score=jnp.array(0).astype(jnp.int32),
@@ -247,7 +258,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             player_move_state=PlayerMoveState.new(),
             tower_state=TowerState.new(state_key),
             reached_apex=jnp.array(False),
+            climbed_floors=jnp.array(0, dtype=jnp.int32),
+            flowerpot_enemy=FlowerpotEnemyState(
+                window_id=jnp.zeros((num_flowerpot_enemies,), dtype=jnp.int32),
+                cycle_step=jnp.array(-1).astype(jnp.int32),
+                number_of_enemies=jnp.array(0).astype(jnp.int32)
+            ),
         )
+
         initial_obs = self._get_observation(state)
 
         return initial_obs, state
@@ -260,7 +278,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state = self._step_counter(state)
         state = self._player_step(state, atari_action)
         state = self._tower_step(state)
+        state = self._climbed_floors_step(state)
         state = self._score_step(state)
+        state = self._flowerpot_enemy_step(state)
         state = self._bonus_step(state)
 
         _, next_rng = jax.random.split(state.key)
@@ -652,6 +672,115 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         return state.replace(
             player_move_state=next_player_move_state,
         )
+
+    # TODO: Add logic to reset climbed_floors to zero after the life/death logic is implemented.
+    @partial(jax.jit, static_argnums=(0,))
+    def _climbed_floors_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        climbed_triggered = (state.player_move_state.main_state == PlayerStableStates.NEUTRAL) & state.reached_apex
+
+        new_climbed_floors = jax.lax.select(
+            climbed_triggered,
+            state.climbed_floors + 1,
+            state.climbed_floors,
+        )
+
+        return state.replace(climbed_floors=new_climbed_floors)
+
+    # Determine target_enemy_count in current region
+    # If target_enemy_count != stored number_of_enemies, meaning the player has entered a new region, reset state.flowerpot_enemy:
+    #   - If target_enemy_count == 0, meaning the player has entered a new no-enemy-region, just return
+    #   - If target_enemy_count != 0, meaning the player has entered a new enemy-region, then call run_flowerpot_cycle to start the cycle
+    # If target_enemy_count == stored number_of_enemies != 0, meaning the player is still in enemy-region,
+    # then also call run_flowerpot_cycle to continue the cycle
+    # TODO: Adjust target_enemy_count logic after this logic is confirmed
+    @partial(jax.jit, static_argnums=(0,))
+    def _flowerpot_enemy_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        num_slots = self.consts.MAX_FLOWERPOT_ENEMIES
+
+        target_enemy_count = jnp.select(
+            [
+                state.climbed_floors < 1,
+                (state.score >= 100) & (state.score < 300) & (state.climbed_floors >= 1),
+                (state.score >= 400) & (state.score < 600) & (state.climbed_floors >= 1),
+                (state.score >= 700) & (state.score < 900) & (state.climbed_floors >= 1),
+            ],
+            [0, 1, 2, 3],
+            default=0,
+        )
+
+        enemy_count_changed = (
+            target_enemy_count != state.flowerpot_enemy.number_of_enemies
+        )
+
+        def reset_enemy_state(s):
+            return s.replace(
+                flowerpot_enemy=FlowerpotEnemyState(
+                    window_id=jnp.zeros((num_slots,), dtype=jnp.int32),
+                    cycle_step=jnp.array(-1, dtype=jnp.int32),
+                    number_of_enemies=target_enemy_count,
+                )
+            )
+
+        state = jax.lax.cond(
+            enemy_count_changed,
+            reset_enemy_state,
+            lambda s: s,
+            state,
+        )
+
+        def run_flowerpot_cycle(s):
+            branch_idx = jnp.where(
+                (s.flowerpot_enemy.cycle_step == -1) | (s.flowerpot_enemy.cycle_step == 99),
+                0,
+                1,
+            )
+
+            def branch_start_cycle(state: CrazyClimberState) -> CrazyClimberState:
+                next_key, random_key = jax.random.split(state.key)
+                slot_ids = jnp.arange(self.consts.MAX_FLOWERPOT_ENEMIES)
+                active_slots = slot_ids < state.flowerpot_enemy.number_of_enemies
+                random_window_ids = jax.random.permutation(random_key, 24)[
+                    :self.consts.MAX_FLOWERPOT_ENEMIES
+                ].astype(jnp.int32)
+
+                new_window_id = jnp.where(
+                    active_slots,
+                    random_window_ids,
+                    state.flowerpot_enemy.window_id,
+                )
+
+                return state.replace(
+                    key=next_key,
+                    flowerpot_enemy=state.flowerpot_enemy.replace(
+                        window_id=new_window_id,
+                        cycle_step=jnp.array(0, dtype=jnp.int32),
+                    ),
+                )
+
+            def branch_continue_cycle(state: CrazyClimberState) -> CrazyClimberState:
+                return state.replace(
+                    flowerpot_enemy=state.flowerpot_enemy.replace(
+                        cycle_step=state.flowerpot_enemy.cycle_step + 1,
+                    ),
+                )
+
+            return jax.lax.switch(
+                branch_idx,
+                [
+                    branch_start_cycle,
+                    branch_continue_cycle,
+                ],
+                s,
+            )
+
+        return jax.lax.cond(
+            target_enemy_count == 0,
+            lambda s: s,
+            run_flowerpot_cycle,
+            state,
+        )
+
+
 
     @partial(jax.jit, static_argnums=(0,))
     def _score_step(self, state: CrazyClimberState) -> CrazyClimberState:
