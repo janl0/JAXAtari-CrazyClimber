@@ -21,6 +21,7 @@ class PlayerStableStates(IntEnum):
     NEUTRAL = 0
     HALF_PULL_UP = 1
     PULL_UP = 2
+    REACHING = 3
     
 @chex.dataclass
 class PlayerMoveState:
@@ -48,7 +49,7 @@ class TowerLevelType(IntEnum):
     FULL = 0
     MIDDLE_CUT = 1
     SIDE_CUTS = 2
-    
+
 @chex.dataclass
 class TowerState:
     tower_step: int
@@ -73,7 +74,38 @@ class TowerState:
             lowest_level=0,
             levels=CrazyClimberConstants.TOWER1
         )
-    
+
+class HeliFlyAwayStates(IntEnum):
+    NORMAL = 0
+    ONE_ROW = 1
+    BONUS_DEC = 2
+    NOTHING = 3
+    DONE = 4
+
+@chex.dataclass
+class HelicopterState:
+    fly_away_state: HeliFlyAwayStates
+    pos_x: chex.Array
+    pos_y: chex.Array
+    x_dir: chex.Array
+    y_dir: chex.Array
+    x_movement_unlocked: bool
+    fly_away_step: chex.Array
+    step: chex.Array
+
+    @classmethod
+    def new(cls):
+        return cls(
+            fly_away_state=HeliFlyAwayStates.NORMAL,
+            pos_x=CrazyClimberConstants.HELICOPTER_SPAWN[0],
+            pos_y=CrazyClimberConstants.HELICOPTER_SPAWN[1],
+            x_dir=jnp.array(-1),
+            y_dir=jnp.array(1),
+            x_movement_unlocked=jnp.array(False),
+            fly_away_step=jnp.array(0),
+            step=jnp.array(0),
+        )
+
 class CrazyClimberState(struct.PyTreeNode):
     key: chex.PRNGKey
     score: chex.Array
@@ -82,6 +114,7 @@ class CrazyClimberState(struct.PyTreeNode):
     player_move_state: PlayerMoveState
     tower_state: TowerState
     reached_apex: chex.Array
+    helicopter_state: HelicopterState
 
 class CrazyClimberObservation(struct.PyTreeNode):
     pass
@@ -96,7 +129,7 @@ def _create_block_sprite_with_padding(color: tuple[int, int, int, int], shape: t
     padded_box = jnp.zeros((*wanted_shape, 4), dtype=jnp.uint8)
     sprite = jnp.tile(jnp.array(color, dtype=jnp.uint8), (*shape[:2], 1))
     padded_sprite = padded_box.at[0:shape[0], 0:shape[1]].set(sprite)
-    return padded_sprite 
+    return padded_sprite
 
 
 def _get_default_asset_config() -> tuple:
@@ -189,10 +222,25 @@ def _get_default_asset_config() -> tuple:
             'player/sideways/right/right_up/half_pull_up_5.npy',
             'player/sideways/right/right_up/half_pull_up_9.npy',
             ]},
+        {'name': 'player_reaching_group', 'type': 'group', 'files': [
+            'player/reaching/left.npy',
+            'player/reaching/right.npy',
+        ]},
         {'name': 'wall', 'type': 'procedural', 'data': wall_sprite},
         {'name': 'ceiling', 'type': 'procedural', 'data': ceiling_sprite},
         {'name': 'floor', 'type': 'procedural', 'data': floor_sprite},
-        {'name': 'window_blind_group', 'type': 'procedural', 'data': window_sprites}
+        {'name': 'window_blind_group', 'type': 'procedural', 'data': window_sprites},
+        {'name': 'ceiling', 'type': 'procedural', 'data': ceiling_sprite},
+        {'name': 'helicopter_right', 'type': 'group', 'files': [
+            'helicopter/right/0+2.npy',
+            'helicopter/right/1.npy',
+            'helicopter/right/3.npy',
+        ]},
+        {'name': 'helicopter_left', 'type': 'group', 'files': [
+            'helicopter/left/0+2.npy',
+            'helicopter/left/1.npy',
+            'helicopter/left/3.npy',
+        ]},
     )
 
 class CrazyClimberConstants(struct.PyTreeNode):
@@ -202,13 +250,23 @@ class CrazyClimberConstants(struct.PyTreeNode):
     WIDTH: int = struct.field(pytree_node=False, default=160)
     HEIGHT: int = struct.field(pytree_node=False, default=210)
 
-    PLAYER_Y: int = struct.field(pytree_node=False, default=160)
-    PLAYER_POSSIBLE_X: jnp.ndarray = struct.field(pytree_node=False, default=jnp.array([40, 46, 52, 58, 64, 72, 80, 86, 92, 98, 104]))
-    TOWER_POSSIBLE_SPRITE_CLIP: jnp.ndarray = struct.field(pytree_node=False, default=jnp.array([0, 4, 7, 10])) 
+    PLAYER_Y: int = struct.field(pytree_node=False, default=156)
+    PLAYER_POSSIBLE_X: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda:jnp.array([40, 46, 52, 58, 64, 72, 80, 86, 92, 98, 104]))
+    TOWER_POSSIBLE_SPRITE_CLIP: jnp.ndarray = struct.field(pytree_node=False, default_factory=lambda:jnp.array([0, 4, 7, 10]))
+
+    HELICOPTER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(26, 30))
+    HELICOPTER_SPAWN: Tuple[int, int] = struct.field(pytree_node=False, default=(35,67))
+    HELICOPTER_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default=(10, 35+HELICOPTER_SIZE.default[1]))
+    HELICOPTER_BORDERS_X: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 110))
+    HELICOPTER_BORDERS_Y: Tuple[int, int] = struct.field(pytree_node=False, default=(128,69))
+    HELICOPTER_SPAWN_HEIGHT: int = struct.field(pytree_node=False, default=100) # TODO: Should be set to max tower height when merged, maybe rename?
+    HELICOPTER_MOVEMENT_BEGIN: int = struct.field(pytree_node=False, default=116) # TODO: value is not pixel perfect yet
+    HELICOPTER_MAX_STEPS: int = struct.field(pytree_node=False, default=1540) #TODO: not precise value yet
+    HELICOPTER_SEQUENCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda:jnp.array([0,1,0,2]))
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
     TOWER1: jnp.ndarray = struct.field(
-        pytree_node=False, 
+        pytree_node=False,
         default=jnp.concat([
                 jnp.repeat(TowerLevelType.MIDDLE_CUT, 5),
                 jnp.repeat(TowerLevelType.FULL, 9),
@@ -249,6 +307,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             player_move_state=PlayerMoveState.new(),
             tower_state=TowerState.new(state_key),
             reached_apex=jnp.array(False),
+            helicopter_state=HelicopterState.new(),
         )
         initial_obs = self._get_observation(state)
 
@@ -264,6 +323,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state = self._tower_step(state)
         state = self._score_step(state)
         state = self._bonus_step(state)
+        state = jax.lax.cond(state.score >= self.consts.HELICOPTER_SPAWN_HEIGHT,
+            lambda: self._helicopter_step(state),
+            lambda: state,
+        )
 
         _, next_rng = jax.random.split(state.key)
         state = state.replace(key=next_rng)
@@ -287,42 +350,42 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             blind_dirs_left = windows[:, :3, 1]
 
             new_blinds_left = jnp.where(
-                blind_dirs_left == 1, 
-                jnp.minimum(blinds_left + 1, 6), 
+                blind_dirs_left == 1,
+                jnp.minimum(blinds_left + 1, 6),
                 blinds_left
             )
 
             new_blinds_left = jnp.where(
-                blind_dirs_left == -1, 
-                jnp.maximum(new_blinds_left - 1, 0), 
+                blind_dirs_left == -1,
+                jnp.maximum(new_blinds_left - 1, 0),
                 new_blinds_left
             )
 
             new_blind_dirs_left = jnp.where(
                 new_blinds_left == 6,
                 blind_dirs_left * -1,
-                blind_dirs_left  
+                blind_dirs_left
             )
-            
+
             new_blind_dirs_left = jnp.where(
                 new_blinds_left == 0,
                 jnp.zeros_like(new_blind_dirs_left),
                 new_blind_dirs_left
             )
-            
+
             windows_left = jnp.stack([new_blinds_left, new_blind_dirs_left], axis=-1)
             return jnp.concatenate([windows_left, jnp.fliplr(windows_left)], axis=1)
-        
+
         @partial(jax.jit)
         def shift_windows(windows: jnp.ndarray, spawn_propability: float, key) -> jnp.ndarray:
             windows = jnp.roll(windows, shift=1, axis=0)
             new_blind_dirs_left = jax.random.choice(key, jnp.array([0, 1]), (1, 3), p=jnp.array([1 - spawn_propability, spawn_propability]))
             new_blinds_left = jnp.zeros((1, 3))
             new_row_left = jnp.stack([new_blinds_left, new_blind_dirs_left], axis=2)
-            new_row = jnp.concatenate([new_row_left, jnp.fliplr(new_row_left)], axis=1) 
+            new_row = jnp.concatenate([new_row_left, jnp.fliplr(new_row_left)], axis=1)
             windows = windows.at[:1, :, :].set(new_row)
             return windows
-        
+
         @partial(jax.jit)
         def update_tower(s: TowerState) -> TowerState:
             possible_tower_steps = jnp.array([0, 1, 1, 1, 2, 2, 2, 3, 3, 3])
@@ -359,10 +422,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             (is_falling == False) & (state.tower_state.is_falling == True),
             (is_falling == True) & (state.tower_state.is_falling == False),
         ]
-        
+
         branch_idx = jnp.select(
-            update_conds, 
-            [0, 1, 2], 
+            update_conds,
+            [0, 1, 2],
             default=3
         )
 
@@ -375,8 +438,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 lambda: state.tower_state,
             ]
         )
-        
-        return state.replace(tower_state=tower_state) 
+
+        return state.replace(tower_state=tower_state)
         
     @partial(jax.jit, static_argnums=(0,))
     def _player_step(self, state: CrazyClimberState, action: chex.Array) -> CrazyClimberState:
@@ -384,7 +447,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         def is_left_hand_safe(state: CrazyClimberState) -> bool:
             player_state = state.player_move_state
             left_moving = ((player_state.sub_step > 1) & jnp.any(jnp.array([
-                ((player_state.hand_dir == 1) & 
+                ((player_state.hand_dir == 1) &
                 (player_state.main_state == PlayerStableStates.NEUTRAL)),
                 ((player_state.hand_dir == -1) &
                 (player_state.main_state == PlayerStableStates.HALF_PULL_UP)),
@@ -406,7 +469,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                     lambda: state.tower_state.windows[9:, 5, 0],
                 ],
             )
-            
+
             return jax.lax.cond(
                 left_moving,
                 lambda: False,
@@ -417,12 +480,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                     lambda: collision_windows[0] != 6
                 )
             )
-            
+
         @partial(jax.jit)
         def is_right_hand_safe(state: CrazyClimberState) -> bool:
             player_state = state.player_move_state
             right_moving = ((player_state.sub_step > 1) & jnp.any(jnp.array([
-                ((player_state.hand_dir == -1) & 
+                ((player_state.hand_dir == -1) &
                 (player_state.main_state == PlayerStableStates.NEUTRAL)),
                 ((player_state.hand_dir == 1) &
                 (player_state.main_state == PlayerStableStates.HALF_PULL_UP)),
@@ -455,13 +518,19 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                     lambda: collision_windows[0] != 6
                 )
             )
-            
+
         @partial(jax.jit)
-        def move_upwards(s: PlayerMoveState) -> PlayerMoveState: 
-            is_up_move_possible = (jax.lax.abs(s.side_step) <= 3)
+        def move_upwards(s: PlayerMoveState) -> PlayerMoveState:
+            is_up_move_possible = (jax.lax.abs(s.side_step) <= 3) & (s.main_state != PlayerStableStates.REACHING)
+            on_top_of_tower = state.score >= CrazyClimberConstants.HELICOPTER_SPAWN_HEIGHT
             transitioning_states = (((s.main_state != PlayerStableStates.PULL_UP) & (s.sub_step == 4)) |
                                     ((s.main_state == PlayerStableStates.PULL_UP) & (s.sub_step == 9)))
-            next_state_on_transition = jnp.array([PlayerStableStates.NEUTRAL, PlayerStableStates.HALF_PULL_UP, PlayerStableStates.PULL_UP])[(s.main_state + 1) % 3] 
+            next_state_on_transition = jnp.array([PlayerStableStates.NEUTRAL, PlayerStableStates.HALF_PULL_UP, PlayerStableStates.PULL_UP])[(s.main_state + 1) % 3]
+            next_state_on_transition = jnp.where(
+                on_top_of_tower,
+                PlayerStableStates.REACHING,
+                next_state_on_transition,
+            )
             next_hand_dir = jax.lax.select(
                 transitioning_states & (next_state_on_transition == PlayerStableStates.NEUTRAL),
                 s.hand_dir * -1,
@@ -481,22 +550,47 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         @partial(jax.jit)
         def move_downwards(s: PlayerMoveState) -> PlayerMoveState:
-            is_down_move_possible = (jax.lax.abs(s.side_step) <= 3) & (s.sub_step > 0) & (s.main_state != PlayerStableStates.PULL_UP)
-            next_hand_dir = jax.lax.select(
-                (s.main_state == PlayerStableStates.NEUTRAL) & (s.sub_step == 1),
+            is_down_move_possible = ((s.main_state == PlayerStableStates.REACHING)
+                                     |(
+                                             (jax.lax.abs(s.side_step) <= 3)
+                                             & (s.sub_step > 0)
+                                             & (s.main_state != PlayerStableStates.PULL_UP)
+                                     ))
+
+            # transition flags
+            is_half_pull_up_cancel = (s.main_state == PlayerStableStates.HALF_PULL_UP) & (s.sub_step == 1)
+            is_reaching_cancel = s.main_state == PlayerStableStates.REACHING
+            is_neutral_step1 = (s.main_state == PlayerStableStates.NEUTRAL) & (s.sub_step == 1)
+
+            # next state logic
+            next_main_state = jnp.where(
+                is_half_pull_up_cancel | is_reaching_cancel,
+                PlayerStableStates.NEUTRAL,
+                s.main_state
+            )
+            next_sub_step = jnp.where(
+                is_half_pull_up_cancel,
+                0,
+                jnp.where(
+                    is_reaching_cancel,
+                    4,
+                    s.sub_step - 1,
+                ),
+            )
+            next_hand_dir = jnp.where(
+                is_neutral_step1 | is_half_pull_up_cancel,
                 s.hand_dir * -1,
                 s.hand_dir
             )
+
             return jax.lax.cond(
                 is_down_move_possible,
-                lambda s: jax.lax.cond(
-                    (s.main_state == PlayerStableStates.HALF_PULL_UP) & (s.sub_step == 1),
-                    lambda _: s.replace(main_state=PlayerStableStates.NEUTRAL, sub_step=0, hand_dir=s.hand_dir * -1),
-                    lambda s: s.replace(sub_step=s.sub_step - 1, hand_dir=next_hand_dir),
-                    operand=s
+                lambda: s.replace(
+                    main_state=next_main_state,
+                    sub_step=next_sub_step,
+                    hand_dir=next_hand_dir
                 ),
-                lambda s: s,
-                operand=s
+                lambda: s,
             )
         
         @partial(jax.jit)
@@ -513,7 +607,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 lambda s: s,
                 operand=s,
             )
-        
+
         @partial(jax.jit)
         def update_player_move_state(s: PlayerMoveState) -> PlayerMoveState:
             return jax.lax.cond(
@@ -521,12 +615,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 lambda: s.replace(falling_count=jnp.maximum(s.falling_count - 1, 0)),
                 lambda: s
             )
-        
+
         def can_move_left(state: CrazyClimberState) -> bool:
             left_arm_up = (state.player_move_state.hand_dir == 1) & (state.player_move_state.main_state != PlayerStableStates.NEUTRAL)
             hand_offset = jnp.where(left_arm_up, 1, 0)
             next_pos_x = state.player_move_state.pos_x - 1
-            
+
             possible_x_full = jnp.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
             possible_x_middle_cut = jnp.array([0, 1, 2, 8, 9, 10])
             possible_x_side_cuts = jnp.array([5, 6, 7])
@@ -543,12 +637,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             window_x = jnp.array([0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4])[state.player_move_state.pos_x]
             can_move_left &= state.tower_state.windows[10 - hand_offset, window_x, 0] != 6
             return can_move_left
-        
+
         def can_move_right(state: CrazyClimberState) -> bool:
             right_arm_up = (state.player_move_state.hand_dir == -1) & (state.player_move_state.main_state != PlayerStableStates.NEUTRAL)
             hand_offset = jnp.where(right_arm_up, 1, 0)
             next_pos_x = state.player_move_state.pos_x + 1
-            
+
             possible_x_full = jnp.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
             possible_x_middle_cut = jnp.array([0, 1, 2, 8, 9, 10])
             possible_x_side_cuts = jnp.array([5, 6, 7])
@@ -565,7 +659,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             window_x = jnp.array([1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 5])[state.player_move_state.pos_x]
             can_move_right &= state.tower_state.windows[10 - hand_offset, window_x, 0] != 6
             return can_move_right
-        
+
         def can_move_up(state: CrazyClimberState) -> bool:
             possible_up_full = jnp.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
             possible_up_middle_cut = jnp.array([0, 1, 2, 8, 9, 10])
@@ -579,12 +673,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                     lambda: jnp.any(possible_up_side_cuts == state.player_move_state.pos_x),
                 ]
             )
-            
+
             window_cols = jnp.array([[0, 0], [0, 1], [1, 1], [1, 2], [2, 2], [2, 3], [3, 3], [3, 4], [4, 4], [4, 5], [5, 5]])[state.player_move_state.pos_x]
             blinds = state.tower_state.windows[9, window_cols, 0]
-            can_move_up &= ((state.player_move_state.main_state != PlayerStableStates.HALF_PULL_UP) | 
+            can_move_up &= ((state.player_move_state.main_state != PlayerStableStates.HALF_PULL_UP) |
                 ((state.player_move_state.main_state == PlayerStableStates.HALF_PULL_UP) & jnp.all(blinds != 6)))
-            
+
             return can_move_up
 
 
@@ -598,6 +692,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         player_move_state = state.player_move_state
         is_falling = player_move_state.falling_count > 0
+        is_flying_away = state.helicopter_state.fly_away_step > 0
+        movement_locked = jnp.logical_or(is_falling, is_flying_away)
 
         falling_conds = jnp.array([
             (~left_hand_safe) & (~right_hand_safe),
@@ -615,17 +711,17 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         should_fall = jnp.any(falling_conds) | player_move_state.should_fall
         action_state_cases = [
-            should_fall & (~is_falling),
-            up & (player_move_state.main_state != PlayerStableStates.PULL_UP) & (~is_falling) & can_move_up,
-            down & (player_move_state.main_state == PlayerStableStates.PULL_UP) & (~is_falling),
-            down & (player_move_state.main_state != PlayerStableStates.PULL_UP) & (~is_falling),
-            left & right_hand_safe & (~is_falling),
-            right & left_hand_safe & (~is_falling)
+            should_fall & (~movement_locked),
+            up & (player_move_state.main_state != PlayerStableStates.PULL_UP) & (~movement_locked) & can_move_up,
+            down & (player_move_state.main_state == PlayerStableStates.PULL_UP) & (~movement_locked),
+            down & (player_move_state.main_state != PlayerStableStates.PULL_UP) & (~movement_locked),
+            left & right_hand_safe & (~movement_locked),
+            right & left_hand_safe & (~movement_locked)
         ]
         
         branch_idx = jnp.select(
             action_state_cases, 
-            [0, 1, 2, 3, 4, 5], 
+            [0, 1, 2, 3, 4, 5],
             default=6
         )
         
@@ -641,14 +737,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 lambda s: update_player_move_state(s)
             ],
             operand=player_move_state
-        )
-        
-        jax.debug.print(
-            "main state: {x}, sub step: {y}, side step {z}, hand dir: {w}", 
-            x=next_player_move_state.main_state, 
-            y=next_player_move_state.sub_step,
-            z=next_player_move_state.side_step,
-            w=next_player_move_state.hand_dir,
         )
 
         return state.replace(
@@ -676,7 +764,202 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         return state.replace(bonus=bonus)
 
-    
+    @partial(jax.jit, static_argnums=(0,))
+    def _helicopter_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        @partial(jax.jit)
+        def normal_step(state: CrazyClimberState) -> CrazyClimberState:
+            heli_state = state.helicopter_state
+
+            # movement specific stuff
+            should_move_x = (heli_state.x_movement_unlocked & (state.step_counter % 2 == 0))
+            should_move_y = True
+
+            # border constraints
+            hit_left_wall = ((heli_state.pos_x <= CrazyClimberConstants.HELICOPTER_BORDERS_X[0])
+                             & (heli_state.x_dir < 0))
+            hit_right_wall = ((heli_state.pos_x >= CrazyClimberConstants.HELICOPTER_BORDERS_X[1])
+                              & (heli_state.x_dir > 0))
+            hit_lower_wall = ((heli_state.pos_y >= CrazyClimberConstants.HELICOPTER_BORDERS_Y[0])
+                              & (heli_state.y_dir < 0))
+            hit_upper_wall = ((heli_state.pos_y <= CrazyClimberConstants.HELICOPTER_BORDERS_Y[1])
+                              & (heli_state.y_dir > 0))
+
+            # For some reason movement in x direction only begins after going up and down and reaching a certain threshold
+            heli_state.x_movement_unlocked = jnp.where(
+                heli_state.pos_y > CrazyClimberConstants.HELICOPTER_MOVEMENT_BEGIN,
+                True,
+                heli_state.x_movement_unlocked
+            )
+
+            # direction flip
+            should_flip_hor_dir = (hit_right_wall | hit_left_wall)
+            should_flip_vert_dir = (hit_upper_wall | hit_lower_wall)
+
+            heli_state.x_dir = jnp.where(should_flip_hor_dir, heli_state.x_dir * -1, heli_state.x_dir)
+            heli_state.y_dir = jnp.where(should_flip_vert_dir, heli_state.y_dir * -1,
+                                               heli_state.y_dir)
+
+            # update position
+            heli_state.pos_x = jnp.where(
+                should_move_x,
+                heli_state.pos_x + heli_state.x_dir,
+                heli_state.pos_x
+            )
+            heli_state.pos_y = jnp.where(
+                should_move_y,
+                heli_state.pos_y - heli_state.y_dir,
+                heli_state.pos_y,
+            )
+
+            return state.replace(
+                helicopter_state=heli_state,
+            )
+
+        @partial(jax.jit)
+        def caught_helicopter_step(state: CrazyClimberState) -> CrazyClimberState:
+            """
+            step method when heli flies away after catching it
+            first decrements the bonus and adds on to score
+            then yadda yadda
+            """
+            bonus_not_zero = state.bonus > 0
+            in_dec_state = state.helicopter_state.fly_away_state == HeliFlyAwayStates.BONUS_DEC
+            should_dec = bonus_not_zero & in_dec_state
+
+            next_bonus = jnp.where(should_dec, state.bonus - 100, state.bonus)
+            next_score = state.score - next_bonus + state.bonus
+            fly_away_step = state.helicopter_state.fly_away_step
+            current_fly_away_state = state.helicopter_state.fly_away_state
+
+            # transition conditions
+            normal_thold = (fly_away_step > 20) & (state.helicopter_state.fly_away_state == HeliFlyAwayStates.NORMAL)
+            one_row_thold = (fly_away_step > 40) & (state.helicopter_state.fly_away_state == HeliFlyAwayStates.ONE_ROW)
+            bonus_dec_thold = (state.bonus <= 0) & (state.helicopter_state.fly_away_state == HeliFlyAwayStates.BONUS_DEC)
+            nothing_thold = (fly_away_step > 160) & (state.helicopter_state.fly_away_state == HeliFlyAwayStates.NOTHING)
+
+            next_fly_away_state = jnp.where(
+                nothing_thold,
+                HeliFlyAwayStates.DONE,
+                jnp.where(
+                    bonus_dec_thold,
+                    HeliFlyAwayStates.NOTHING,
+                    jnp.where(
+                        one_row_thold,
+                        HeliFlyAwayStates.BONUS_DEC,
+                        jnp.where(
+                            normal_thold,
+                            HeliFlyAwayStates.ONE_ROW,
+                            current_fly_away_state
+                        )
+                    )
+                )
+            )
+
+            next_fly_away_step = jnp.where(next_fly_away_state != current_fly_away_state,
+                0,
+                fly_away_step + 1,
+            )
+
+            # if player caught, fly up for some time (need collision method for this)
+            # else if state.bonus > 0 decrement bonus move in y direction
+            # else done, next level
+            next_helicopter_state = state.helicopter_state.replace(
+                fly_away_step=next_fly_away_step,
+                fly_away_state=next_fly_away_state,
+            )
+
+            return state.replace(
+                bonus=next_bonus,
+                score=next_score,
+                helicopter_state=next_helicopter_state,
+            )
+
+        @partial(jax.jit)
+        def no_time_step(state: CrazyClimberState) -> CrazyClimberState:
+            """
+            step method when heli flies away after time runs out
+            first decrements the bonus while y movement then triggers next level
+            """
+            heli_state = state.helicopter_state
+            # movement constraints
+            hit_lower_wall = ((heli_state.pos_y >= CrazyClimberConstants.HELICOPTER_BORDERS_Y[0])
+                              & (heli_state.y_dir < 0))
+            hit_upper_wall = ((heli_state.pos_y <= CrazyClimberConstants.HELICOPTER_BORDERS_Y[1])
+                              & (heli_state.y_dir > 0))
+
+            should_flip_vert_dir = (hit_upper_wall | hit_lower_wall)
+            next_y_dir = jnp.where(should_flip_vert_dir, heli_state.y_dir * -1,
+                                         heli_state.y_dir)
+
+            # update position
+            next_pos_y = heli_state.pos_y - heli_state.y_dir
+
+            # check for end
+            done = state.bonus == 0
+
+            # bonus decrement
+            next_bonus = jnp.where(~done, state.bonus - 100, state.bonus)
+            next_fly_away_step = heli_state.fly_away_step + 1
+
+            next_helicopter_state = heli_state.replace(
+                fly_away_step=next_fly_away_step,
+                pos_y=next_pos_y,
+                y_dir=next_y_dir,
+            )
+
+            return state.replace(
+                bonus=next_bonus,
+                helicopter_state=next_helicopter_state,
+            )
+
+        def check_heli_collision(state: CrazyClimberState) -> bool:
+            heli_state = state.helicopter_state
+            correct_height = heli_state.pos_y >= 128
+            reaching = state.player_move_state.main_state == PlayerStableStates.REACHING
+            x_dif = self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x] - heli_state.pos_x
+            correct_x = (x_dif > 0) & (x_dif < CrazyClimberConstants.HELICOPTER_SIZE[0])
+
+            collision = correct_height & reaching & correct_x
+            return collision
+
+        heli_state = state.helicopter_state
+        #TODO: needs to be adapted to work multiple times at the next level. needs to be cleared at some point (maybe when progressing to the next level)
+        next_step = heli_state.step + 1
+
+        heli_collision = check_heli_collision(state)
+        time_expired = (heli_state.step >= CrazyClimberConstants.HELICOPTER_MAX_STEPS)
+        branch_idx = jnp.select(
+            [heli_collision, time_expired],
+            [2,1],
+            default=0,
+        )
+
+        next_state = jax.lax.switch(
+            branch_idx,
+            [
+                lambda s: normal_step(s),
+                lambda s: no_time_step(s),
+                lambda s: caught_helicopter_step(s),
+            ],
+            operand=state
+        )
+
+        next_state = next_state.replace(
+            helicopter_state=next_state.helicopter_state.replace(
+                step=next_step,
+            )
+        )
+
+        #jax.debug.print(
+        #    "helicopter_state: x:{x}, y:{y}, hor_dir:{z}, vert_dir:{a}",
+        #    x=next_state.helicopter_state.pos_x,
+        #    y=next_state.helicopter_state.pos_y,
+        #    z=next_state.helicopter_state.x_dir,
+        #    a=next_state.helicopter_state.y_dir,
+        #)
+
+        return next_state
+
     def render(self, state: CrazyClimberState) -> jnp.ndarray:
         return self.renderer.render(state)
 
@@ -769,6 +1052,15 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 ]),
             ])
 
+            self.PLAYER_REACHING_SPRITES = jnp.array(
+                self.SHAPE_MASKS["player_reaching_group"],
+            )
+
+            self.HELICOPTER_SPRITES = jnp.array([
+                self.SHAPE_MASKS["helicopter_left"],
+                self.SHAPE_MASKS["helicopter_right"],
+            ])
+
             self.PLAYER_UPWARDS_SPRITE_SEQUENCE = jnp.array([0, 0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11])
             self.PLAYER_SIDEWAYS_SPRITE_SEQUENCE = jnp.array([0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3])
             
@@ -815,7 +1107,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         @partial(jax.jit, static_argnums=(0,1))
         def _create_raster(self, shape: tuple[int, int]) -> jnp.ndarray:
             return jnp.tile(255, shape)
-        
+
         @partial(jax.jit, static_argnums=(0,))
         def _normalize_raster(self, raster: jnp.ndarray) -> jnp.ndarray:
             return jnp.where(raster != 255, raster, 0)
@@ -839,7 +1131,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         
         @partial(jax.jit, static_argnums=(0,))
         def _render_player(self, state: CrazyClimberState) -> jnp.ndarray:
-            player_raster = self._create_raster((23, 16))
+            player_raster = self._create_raster((27, 16))
 
             move_state = state.player_move_state
 
@@ -850,16 +1142,21 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             @partial(jax.jit)
             def map_player_to_sprite(sprite_index_up: int, sprite_index_side: int, hand_index: int, side_index: int) -> jnp.ndarray:
-                return jax.lax.cond(
-                    jnp.logical_and(move_state.sub_step <= 1, jnp.abs(move_state.side_step) > 3),
-                    lambda _: jax.lax.cond(
-                        move_state.main_state == PlayerStableStates.HALF_PULL_UP,
-                        lambda _: self.PLAYER_SIDEWAYS_SPRITES_ARM_SPECIFIC[hand_index][side_index][sprite_index_side],
-                        lambda _: self.PLAYER_SIDEWAYS_SPRITES[move_state.main_state][side_index][sprite_index_side],
-                        operand=None),
-                    lambda _: self.PLAYER_UPWARDS_SPRITES[hand_index][sprite_index_up],
-                    operand=None
-                )
+                # flags
+                is_sideways = jnp.logical_and(move_state.sub_step <= 1, jnp.abs(move_state.side_step) > 3)
+                is_half_pull_up = move_state.main_state == PlayerStableStates.HALF_PULL_UP
+                is_reaching = move_state.main_state == PlayerStableStates.REACHING
+
+                # sprite definitions
+                sprite_reaching = self.PLAYER_REACHING_SPRITES[hand_index]
+                sprite_side_arm = self.PLAYER_SIDEWAYS_SPRITES_ARM_SPECIFIC[hand_index][side_index][sprite_index_side]
+                sprite_side_def = self.PLAYER_SIDEWAYS_SPRITES[move_state.main_state][side_index][sprite_index_side]
+                sprite_upwards = self.PLAYER_UPWARDS_SPRITES[hand_index][sprite_index_up]
+
+                # sprite selection
+                sprite_sideways = jnp.where(is_half_pull_up, sprite_side_arm, sprite_side_def)
+                sprite_motion = jnp.where(is_sideways, sprite_sideways, sprite_upwards)
+                return jnp.where(is_reaching, sprite_reaching, sprite_motion)
             
             player_sprite = map_player_to_sprite(sprite_index_up, sprite_index_side, hand_index, side_index)
             player_raster = self.jr.render_at(player_raster, 0, 0, player_sprite)
@@ -878,7 +1175,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
                 cutout = cutouts[level_type]
                 return jnp.where(cutout != 255, cutout, raster)
-            
+
             batched_clip_tower_cut = jax.vmap(clip_tower_cut, in_axes=(None, None, 0, 0))
 
             tower_raster = jnp.copy(self.TOWER_SPRITE)
@@ -900,11 +1197,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             falling_tower_raster = jnp.copy(self.TOWER_SPRITE)
             falling_tower_sprite = jnp.concat(
                 batched_clip_tower_cut(
-                    falling_tower_raster, 
-                    self.TOWER_CUTOUTS, 
-                    level_offset_y, 
+                    falling_tower_raster,
+                    self.TOWER_CUTOUTS,
+                    level_offset_y,
                     jnp.repeat(level_indices[0], 13)
-                ), 
+                ),
                 axis=0
             )
 
@@ -919,7 +1216,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 lambda: self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.tower_state.tower_step],
                 lambda: self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.player_move_state.falling_count % 4]
             )
-            
+
             tower_raster = jax.lax.dynamic_slice_in_dim(
                 tower_sprite,
                 top_clip,
@@ -930,13 +1227,39 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             return tower_raster
 
         @partial(jax.jit, static_argnums=(0,))
+        def _render_helicopter(self, state: CrazyClimberState) -> jnp.ndarray:
+            helicopter_raster = self._create_raster(self.consts.HELICOPTER_SIZE)
+
+            helicopter_state = state.helicopter_state
+
+            dir_index = (helicopter_state.x_dir > 0).astype(int)
+            helicopter_index = self.consts.HELICOPTER_SEQUENCE[
+                (((helicopter_state.step + self.consts.HELICOPTER_SEQUENCE.size) * helicopter_state.x_dir) % 4).astype(int)]
+
+            helicopter_sprite = self.HELICOPTER_SPRITES[dir_index][helicopter_index]
+
+            helicopter_raster = self.jr.render_at(
+                helicopter_raster,
+                0, 0,
+                helicopter_sprite,
+            )
+
+            return helicopter_raster
+
+        @partial(jax.jit, static_argnums=(0,))
         def render(self, state: CrazyClimberState) -> jnp.ndarray:
             raster = self._create_raster((210, 160))
 
             player_raster = self._render_player(state)
             tower_raster = self._render_tower(state)
+            helicopter_raster = self._render_helicopter(state)
             raster = self._clip_raster(raster, tower_raster, 40, 44) # self.jr.render_at_clipped(raster, 0, 0, tower_raster)
             raster = self._clip_raster(raster, player_raster, self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x], self.consts.PLAYER_Y) # self.jr.render_at_clipped(raster, state.player_move_state.pos_x, self.consts.PLAYER_Y, player_raster)
+            raster = jax.lax.cond(state.score >= self.consts.HELICOPTER_SPAWN_HEIGHT,
+                lambda: self._clip_raster(raster, helicopter_raster, state.helicopter_state.pos_x, state.helicopter_state.pos_y),
+                lambda: raster,
+            )
+
             raster = self._normalize_raster(raster)
 
             score_digits = self.jr.int_to_digits(state.score, max_digits=6)
