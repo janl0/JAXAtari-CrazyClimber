@@ -259,7 +259,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
     HELICOPTER_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default=(10, 35+HELICOPTER_SIZE.default[1]))
     HELICOPTER_BORDERS_X: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 110))
     HELICOPTER_BORDERS_Y: Tuple[int, int] = struct.field(pytree_node=False, default=(128,69))
-    HELICOPTER_SPAWN_HEIGHT: int = struct.field(pytree_node=False, default=100) # TODO: Should be set to max tower height when merged, maybe rename?
+    HELICOPTER_SPAWN_HEIGHT: int = struct.field(pytree_node=False, default=20000) # TODO: Should be set to max tower height when merged, maybe rename?
     HELICOPTER_MOVEMENT_BEGIN: int = struct.field(pytree_node=False, default=116) # TODO: value is not pixel perfect yet
     HELICOPTER_MAX_STEPS: int = struct.field(pytree_node=False, default=1540) #TODO: not precise value yet
     HELICOPTER_SEQUENCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda:jnp.array([0,1,0,2]))
@@ -1216,6 +1216,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 lambda: self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.tower_state.tower_step],
                 lambda: self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.player_move_state.falling_count % 4]
             )
+
+            row_indices = state.tower_state.lowest_level + jnp.arange(13)
+            max_level = CrazyClimberConstants.HELICOPTER_SPAWN_HEIGHT / 100
+            valid_row_mask = row_indices < (max_level + 2) # needs to be two higher because of the unused rows at the bottom
+
+            pixel_mask = jnp.repeat(valid_row_mask[::-1], 13)[:, None]
+            tower_sprite = jnp.where(pixel_mask, tower_sprite, 0)
 
             tower_raster = jax.lax.dynamic_slice_in_dim(
                 tower_sprite,
