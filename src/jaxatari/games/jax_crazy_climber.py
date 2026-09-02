@@ -618,8 +618,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         """
         level_state = state.level_state
 
-        # mad doctor logic
-
         # condor logic
         condor_activate = ((state.score >= self.consts.BIRD_SPAWN_THRESHOLD)
                 & (state.score < self.consts.BIRD_DESPAWN_THRESHOLD)
@@ -634,8 +632,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         )
         
         next_enemy = jnp.where(condor_deactivate, level_state.next_enemy + 1, level_state.next_enemy)
-
-        # mad doctor second round logic
 
         new_level_state = level_state.replace(
             condor_active = condor_active,
@@ -1063,7 +1059,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             egg_state = state.bird_state.egg_state
             egg_state.pos_x = state.bird_state.pos_x
             egg_state.pos_y = 69
-            egg_state.dir = state.bird_state.dir
+
+            dir = jnp.where(
+                state.bird_state.pos_x > (state.player_move_state.pos_x + (self.consts.BIRD_SIZE[0] / 2)),
+                -1,
+                1
+            )
+
+            egg_state.dir = dir
             return egg_state
 
         def check_for_collision(state: CrazyClimberState) -> bool:
