@@ -420,6 +420,12 @@ def _get_default_asset_config() -> tuple:
             'egg/8.npy',
             'egg/9.npy',
             'egg/10.npy',
+        ]},
+
+        {'name': 'egg_break', 'type': 'group', 'files': [
+            'egg/break/1.npy',
+            'egg/break/2.npy',
+            'egg/break/3.npy',
         ]}
     )
 
@@ -512,6 +518,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
     EGG_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 7))
     EGG_BORDER_BOTTOM: int = struct.field(pytree_node=False, default=210-EGG_SIZE.default[0]*2)
     EGG_FLICKER: int = struct.field(pytree_node=False, default=130)
+    EGG_BREAK_SEQUENCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([1, 2, 3]))
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
     SCORE_BASE_VALUE: int = struct.field(pytree_node=False, default=100)
@@ -1743,6 +1750,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             #egg_sprite = self.EGG_SPRITES[state.bird_state.egg_y % 11]
             egg_sprite = self.EGG_SPRITES[9]
 
+            #egg_sprite = jax.
+
             egg_raster = self.jr.render_at(
                 egg_raster,
                 0, 0,
@@ -1761,10 +1770,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             window_local_x = jnp.array([4, 16, 28, 44, 56, 68], dtype=jnp.int32)[window_col]
             window_local_y = jnp.array([5, 18, 31, 44, 57, 70, 83, 96, 109, 122, 135], dtype=jnp.int32)[window_row]
 
-            tower_scroll_offset = jax.lax.cond(
+            tower_scroll_offset = jnp.where(
                 ~state.tower_state.is_falling,
-                lambda: self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.tower_state.tower_step],
-                lambda: self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.player_move_state.falling_count % 4],
+                self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.tower_state.tower_step],
+                self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.player_move_state.falling_count % 4],
             )
             top_clip = 14 - tower_scroll_offset
 
