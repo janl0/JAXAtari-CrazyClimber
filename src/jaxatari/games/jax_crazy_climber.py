@@ -996,7 +996,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     
     @partial(jax.jit, static_argnums=(0,))
     def update_player_move_state(self, s: PlayerMoveState) -> PlayerMoveState:
-        jax.debug.print("{x}", x=s.falling_count)
         state = jax.lax.cond(
             s.falling_count > 0,
             lambda: s.replace(falling_count=jnp.maximum(s.falling_count - 1, 0)),
