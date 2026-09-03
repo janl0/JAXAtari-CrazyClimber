@@ -512,13 +512,28 @@ class CrazyClimberConstants(struct.PyTreeNode):
     BIRD_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default=(10, 35+BIRD_SIZE.default[1]))
     BIRD_SPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=5000) # should be 5000 for final version
     BIRD_DESPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=7500) # should be 8500 for final version
-    BIRD_POSSIBLE_STEPS: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 4, 4, 4, 7, 7, 7, 10, 10, 10]))
-    BIRD_SEQUENCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0, 1, 2, 3, 4, 4, 3, 2, 1, 0]))
+    BIRD_POSSIBLE_STEPS: chex.Array = struct.field(
+        pytree_node=False, 
+        default_factory= lambda: jnp.array(
+            [0, 4, 4, 4, 7, 7, 7, 10, 10, 10]
+        )
+    )
+    BIRD_SEQUENCE: chex.Array = struct.field(
+        pytree_node=False, 
+        default_factory= lambda: jnp.array(
+            [0, 1, 2, 3, 4, 4, 3, 2, 1, 0]
+        )
+    )
 
     EGG_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 7))
     EGG_BORDER_BOTTOM: int = struct.field(pytree_node=False, default=210-EGG_SIZE.default[0]*2)
     EGG_FLICKER: int = struct.field(pytree_node=False, default=130)
-    EGG_BREAK_SEQUENCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([1, 2, 3]))
+    EGG_BREAK_SEQUENCE: chex.Array = struct.field(
+        pytree_node=False, 
+        default_factory= lambda: jnp.array(
+            [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]
+        )
+    )
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
     SCORE_BASE_VALUE: int = struct.field(pytree_node=False, default=100)
@@ -1533,6 +1548,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 self.SHAPE_MASKS["bird_right"],
             ])
             self.EGG_SPRITES = self.SHAPE_MASKS["egg_falling"]
+            self.EGG_BREAK_SPRITES = self.SHAPE_MASKS["egg_break"]
 
             self.TOWER_SPRITE = self._generate_tower_sprite()
             self.TOWER_CUTOUTS = self._generate_tower_cutouts()
@@ -1750,7 +1766,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             #egg_sprite = self.EGG_SPRITES[state.bird_state.egg_y % 11]
             egg_sprite = self.EGG_SPRITES[9]
 
-            #egg_sprite = jax.
+            egg_sprite = jnp.where(
+                state.player_move_state.egg_animation_count < 0,
+                self.EGG_SPRITES[9],
+                self.EGG_BREAK_SPRITES[state.player_move_state.egg_animation_count]
+            )
 
             egg_raster = self.jr.render_at(
                 egg_raster,
