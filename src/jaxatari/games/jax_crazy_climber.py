@@ -531,7 +531,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
     EGG_BREAK_SEQUENCE: chex.Array = struct.field(
         pytree_node=False, 
         default_factory= lambda: jnp.array(
-            [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]
+            [3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1]
         )
     )
 
@@ -1215,8 +1215,23 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             lambda: egg_state
         )
 
-        player_flicker = jnp.logical_and(egg_state.pos_y > self.consts.EGG_FLICKER, (state.step_counter % 2) == 0) & state.level_state.condor_active
-        egg_flicker = jnp.logical_and(~player_flicker, egg_state.pos_y > self.consts.EGG_FLICKER) & state.level_state.condor_active
+        animation_active = state.level_state.pause_game
+        player_flicker = (
+            jnp.logical_and(
+                egg_state.pos_y > self.consts.EGG_FLICKER,
+                (state.step_counter % 2) == 0,
+            )
+            & state.level_state.condor_active
+            & ~animation_active
+        )
+        egg_flicker = (
+            jnp.logical_and(
+                ~player_flicker,
+                egg_state.pos_y > self.consts.EGG_FLICKER,
+            )
+            & state.level_state.condor_active
+            & ~animation_active
+        )
 
         egg_state = egg_state.replace(
             flicker=egg_flicker,
@@ -1821,7 +1836,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             egg_raster = self._create_raster(self.consts.EGG_SIZE)
             
             #egg_sprite = self.EGG_SPRITES[state.bird_state.egg_y % 11]
-            egg_sprite = self.EGG_SPRITES[9]
+            #egg_sprite = self.EGG_SPRITES[9]
+
+            jax.debug.print("{x}", x=state.bird_state.egg_state.egg_animation_count - 1)
 
             egg_sprite = jnp.where(
                 state.bird_state.egg_state.egg_animation_count > 0,
