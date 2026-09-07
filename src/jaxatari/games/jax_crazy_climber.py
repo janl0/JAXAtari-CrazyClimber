@@ -510,7 +510,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
     BIRD_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(12, 15))
     BIRD_Y: int = struct.field(pytree_node=False, default=49)
     BIRD_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default=(10, 35+BIRD_SIZE.default[1]))
-    BIRD_SPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=100) # should be 5000 for final version
+    BIRD_SPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=5000) # should be 5000 for final version
     BIRD_DESPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=7500) # should be 8500 for final version
     BIRD_POSSIBLE_STEPS: chex.Array = struct.field(
         pytree_node=False, 
@@ -1122,9 +1122,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     @partial(jax.jit, static_argnums=(0,))
     def _egg_step(self, state: CrazyClimberState) -> CrazyClimberState:
         def spawn_egg(state: CrazyClimberState) -> EggState:
+            half_bird = self.consts.BIRD_SIZE[0] / 2
+            player_x = self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x]
             direction = jnp.where(
-                state.bird_state.pos_x
-                > state.player_move_state.pos_x + self.consts.BIRD_SIZE[0] / 2,
+                (state.bird_state.pos_x + half_bird)
+                > (player_x + half_bird),
                 -1,
                 1,
             )
