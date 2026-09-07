@@ -767,6 +767,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         
     @partial(jax.jit, static_argnums=(0,))
     def _player_step(self, state: CrazyClimberState, action: chex.Array) -> CrazyClimberState:
+        action = jnp.where(
+            state.level_state.pause_game,
+            Action.NOOP,
+            action,
+        )
+
         @partial(jax.jit)
         def is_left_hand_safe(state: CrazyClimberState) -> bool:
             player_state = state.player_move_state
