@@ -1035,19 +1035,36 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def update_egg_animation(self, s: CrazyClimberState) -> CrazyClimberState:
-        state = jax.lax.cond(
-            s.bird_state.egg_state.egg_animation_count > 0,
-            lambda: s.replace(
-                bird_state = s.bird_state.replace(
-                    egg_state = s.bird_state.egg_state.replace(
-                        egg_animation_count=jnp.maximum(s.bird_state.egg_state.egg_animation_count - 1, 0)
-                    )
-                )
+        animation_count = s.bird_state.egg_state.egg_animation_count
+        animation_finished = animation_count == 1
+
+        next_animation_count = jnp.maximum(animation_count - 1, 0)
+
+        next_egg_state = s.bird_state.egg_state.replace(
+            egg_animation_count=next_animation_count,
+            pos_y=jnp.where(
+                animation_finished,
+                self.consts.EGG_BORDER_BOTTOM,
+                s.bird_state.egg_state.pos_y,
             ),
-            lambda: s.replace(level_state = s.level_state.replace(pause_game = False))
         )
 
-        return state
+        return jax.lax.cond(
+            animation_count > 0,
+            lambda: s.replace(
+                level_state=s.level_state.replace(
+                    pause_game=~animation_finished
+                ),
+                bird_state=s.bird_state.replace(
+                    egg_state=next_egg_state
+                ),
+            ),
+            lambda: s.replace(
+                level_state=s.level_state.replace(
+                    pause_game=False
+                )
+            ),
+        )
     
     @partial(jax.jit, static_argnums=(0,))
     def _bird_step(self, state: CrazyClimberState) -> CrazyClimberState:
@@ -1069,21 +1086,23 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             & (hit_right_wall | hit_left_wall) 
             & ~fly_away)
 
-        bird_state.dir = jnp.where(should_flip_dir, bird_state.dir * -1, bird_state.dir)
-
-        bird_state.pos_x = jnp.where(
-            should_move, 
-            bird_state.pos_x + bird_state.dir, 
+        bird_dir = jnp.where(should_flip_dir, bird_state.dir * -1, bird_state.dir)
+        bird_pos_x = jnp.where(
+            should_move,
+            bird_state.pos_x + bird_dir,
             bird_state.pos_x
         )
-
-        bird_state.pos_y = jnp.where(
+        bird_pos_y = jnp.where(
             state.player_move_state.main_state == PlayerStableStates.PULL_UP,
             self.consts.BIRD_Y + self.consts.BIRD_POSSIBLE_STEPS[state.player_move_state.sub_step],
             self.consts.BIRD_Y,
         )
 
-        return state.replace(bird_state = bird_state)
+        return state.replace(bird_state=bird_state.replace(
+            dir=bird_dir,
+            pos_x=bird_pos_x,
+            pos_y=bird_pos_y,
+        ))
 
     @partial(jax.jit, static_argnums=(0,))
     def _egg_step(self, state: CrazyClimberState) -> CrazyClimberState: 
@@ -1094,18 +1113,17 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             """
             Resets egg coordinates
             """
-            egg_state = state.bird_state.egg_state
-            egg_state.pos_x = state.bird_state.pos_x
-            egg_state.pos_y = 69
-
-            dir = jnp.where(
+            direction = jnp.where(
                 state.bird_state.pos_x > (state.player_move_state.pos_x + (self.consts.BIRD_SIZE[0] / 2)),
                 -1,
                 1
             )
 
-            egg_state.dir = dir
-            return egg_state
+            return state.bird_state.egg_state.replace(
+                pos_x=state.bird_state.pos_x,
+                pos_y=jnp.array(69),
+                dir=direction,
+            )
 
         def check_for_collision(state: CrazyClimberState) -> bool:
             """
@@ -1156,10 +1174,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             """
             logic for the egg breaking animation and freezing of the game
             """
+
             anim_count = jnp.array(13)
             pause = jnp.array(True)
 
             level_state = state.level_state.replace(pause_game=pause)
+
             egg_state = state.bird_state.egg_state.replace(egg_animation_count=
                 jnp.where(
                     state.bird_state.egg_state.egg_animation_count == 0,
@@ -1195,26 +1215,30 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             lambda: egg_state
         )
 
-        player_state.flicker = jnp.logical_and(egg_state.pos_y > self.consts.EGG_FLICKER, (state.step_counter % 2) == 0) & state.level_state.condor_active
-        egg_state.flicker = jnp.logical_and(~player_state.flicker, egg_state.pos_y > self.consts.EGG_FLICKER) & state.level_state.condor_active
-        
-        egg_state.pos_y = egg_state.pos_y + jnp.where(state.level_state.pause_game, 0, 1)
-        egg_state.pos_x = egg_state.pos_x + (
+        player_flicker = jnp.logical_and(egg_state.pos_y > self.consts.EGG_FLICKER, (state.step_counter % 2) == 0) & state.level_state.condor_active
+        egg_flicker = jnp.logical_and(~player_flicker, egg_state.pos_y > self.consts.EGG_FLICKER) & state.level_state.condor_active
+
+        egg_state = egg_state.replace(
+            flicker=egg_flicker,
+            pos_y=egg_state.pos_y + jnp.where(state.level_state.pause_game, 0, 1),
+            pos_x=egg_state.pos_x + (
             ((state.step_counter % egg_state.vel) == 0).astype(int) 
             * egg_state.dir 
-            * jnp.where(state.level_state.pause_game, 0, 1))
-        
-        bird_state.egg_state = egg_state
-        bird_state.drop_egg = drop_egg
+            * jnp.where(state.level_state.pause_game, 0, 1)),
+        )
 
-        bird_state.stop = jnp.where(
+        bird_state = state.bird_state.replace(
+            egg_state=egg_state,
+            drop_egg=drop_egg,
+            stop=jnp.where(
             state.player_move_state.should_fall | state.player_move_state.falling_count == 160, 
             jnp.array(True), 
-            state.bird_state.stop)
+            state.bird_state.stop),
+        )
 
         return state.replace(
-            player_move_state = player_state,
-            bird_state = bird_state
+            player_move_state=player_state.replace(flicker=player_flicker),
+            bird_state=bird_state
         )
 
     @partial(jax.jit, static_argnums=(0,))
