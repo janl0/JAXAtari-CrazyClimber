@@ -1462,6 +1462,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             dtype=jnp.uint8
         ) 
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: CrazyClimberState) -> CrazyClimberObservation:
         player = ObjectObservation.create(
             x=state.player_move_state.pos_x,
@@ -1534,11 +1535,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     def _get_info(self, state: CrazyClimberState) -> CrazyClimberInfo:
         return CrazyClimberInfo(time=state.step_counter)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: CrazyClimberState, state: CrazyClimberState) -> float:
         return state.score - previous_state.score
 
+    # TODO festlegen bei welchem score vorbei ist
+    @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: CrazyClimberState) -> bool:
-        # TODO festlegen bei welchem score vorbei ist
         return jnp.logical_or(
             jnp.greater_equal(state.score, 21),
         )
