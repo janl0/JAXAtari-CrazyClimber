@@ -13,7 +13,7 @@ import jax.numpy as jnp
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 
 class Level(IntEnum):
     LEVEL_1 = 1
@@ -191,7 +191,15 @@ class CrazyClimberState(struct.PyTreeNode):
     climbed_floors: chex.Array
 
 class CrazyClimberObservation(struct.PyTreeNode):
-    pass
+    player: ObjectObservation
+    flowerpot_enemy: ObjectObservation
+    flower_pot_yellow: ObjectObservation
+    flower_pot_purple: ObjectObservation
+    bird: ObjectObservation
+    egg: ObjectObservation
+    heli: ObjectObservation
+    score: jnp.ndarray
+    bonus: jnp.ndarray
 
 class CrazyClimberInfo(struct.PyTreeNode):
     pass
