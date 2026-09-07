@@ -1505,6 +1505,13 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             width=jnp.array(self.consts.EGG_SIZE[0]),
             height=jnp.array(self.consts.EGG_SIZE[1]),
         )
+        window_blinds = ObjectObservation.create(
+            x=None,
+            y=None,
+            width=None,
+            height=None,
+        )
+        # heli =
 
         return CrazyClimberObservation(
             player=player,
@@ -1513,7 +1520,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             flower_pot_purple=flower_pot_purple,
             flower_pot_blue=flower_pot_blue,
             bird=bird,
-            egg=egg
+            egg=egg,
+            window_blinds=window_blinds,
+            # heli=
+            score=state.score,
+            bonus=state.bonus,
         )
     
     def obs_to_flat_array(self, obs: CrazyClimberObservation) -> jnp.ndarray:
