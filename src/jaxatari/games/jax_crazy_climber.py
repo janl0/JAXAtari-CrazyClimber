@@ -1532,13 +1532,16 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: CrazyClimberState) -> CrazyClimberInfo:
-        pass
+        return CrazyClimberInfo(time=state.step_counter)
 
     def _get_reward(self, previous_state: CrazyClimberState, state: CrazyClimberState) -> float:
-        return 0
+        return state.score - previous_state.score
 
     def _get_done(self, state: CrazyClimberState) -> bool:
-        pass
+        # TODO festlegen bei welchem score vorbei ist
+        return jnp.logical_or(
+            jnp.greater_equal(state.score, 21),
+        )
 
     class CrazyClimberRenderer(JAXGameRenderer):
         def __init__(self, consts: CrazyClimberConstants = None, config: render_utils.RendererConfig = None):
