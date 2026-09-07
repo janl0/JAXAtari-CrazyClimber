@@ -1836,13 +1836,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             egg_raster = self._create_raster(self.consts.EGG_SIZE)
             
             #egg_sprite = self.EGG_SPRITES[state.bird_state.egg_y % 11]
-            #egg_sprite = self.EGG_SPRITES[9]
 
-            jax.debug.print("{x}", x=state.bird_state.egg_state.egg_animation_count - 1)
+            egg_idx = self.consts.EGG_BREAK_SEQUENCE[state.bird_state.egg_state.egg_animation_count - 1]
 
             egg_sprite = jnp.where(
                 state.bird_state.egg_state.egg_animation_count > 0,
-                self.EGG_BREAK_SPRITES[state.bird_state.egg_state.egg_animation_count - 1],
+                self.EGG_BREAK_SPRITES[egg_idx],
                 self.EGG_SPRITES[9],
             )
 
