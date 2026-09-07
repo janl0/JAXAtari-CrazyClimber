@@ -1074,55 +1074,59 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     
     @partial(jax.jit, static_argnums=(0,))
     def _bird_step(self, state: CrazyClimberState) -> CrazyClimberState:
-        """
-        Calculates new x, y coordinates and determines if bird should fly away.
-        """
         bird_state = state.bird_state
-        
-        # border constraints
-        hit_left_wall  = ((bird_state.pos_x < self.consts.BIRD_BORDERS[0]) 
-            & (bird_state.dir < 0))
-        hit_right_wall = ((bird_state.pos_x > self.consts.WIDTH - self.consts.BIRD_BORDERS[1]) 
-            & (bird_state.dir > 0))
 
-        should_move = (state.step_counter % 2 == 0)
-        fly_away = (bird_state.dir < 0) & (state.score > self.consts.BIRD_DESPAWN_THRESHOLD)
-
-        should_flip_dir = (should_move 
-            & (hit_right_wall | hit_left_wall) 
-            & ~fly_away)
-
-        bird_dir = jnp.where(should_flip_dir, bird_state.dir * -1, bird_state.dir)
-        bird_pos_x = jnp.where(
-            should_move,
-            bird_state.pos_x + bird_dir,
-            bird_state.pos_x
+        at_left_border = (
+            (bird_state.pos_x < self.consts.BIRD_BORDERS[0])
+            & (bird_state.dir < 0)
         )
-        bird_pos_y = jnp.where(
+        at_right_border = (
+            (bird_state.pos_x > self.consts.WIDTH - self.consts.BIRD_BORDERS[1])
+            & (bird_state.dir > 0)
+        )
+        should_move = state.step_counter % 2 == 0
+        should_fly_away = (
+            (bird_state.dir < 0)
+            & (state.score > self.consts.BIRD_DESPAWN_THRESHOLD)
+        )
+        should_change_direction = (
+            should_move
+            & (at_left_border | at_right_border)
+            & ~should_fly_away
+        )
+
+        next_direction = jnp.where(
+            should_change_direction,
+            bird_state.dir * -1,
+            bird_state.dir,
+        )
+        next_pos_x = jnp.where(
+            should_move,
+            bird_state.pos_x + next_direction,
+            bird_state.pos_x,
+        )
+        next_pos_y = jnp.where(
             state.player_move_state.main_state == PlayerStableStates.PULL_UP,
             self.consts.BIRD_Y + self.consts.BIRD_POSSIBLE_STEPS[state.player_move_state.sub_step],
             self.consts.BIRD_Y,
         )
 
-        return state.replace(bird_state=bird_state.replace(
-            dir=bird_dir,
-            pos_x=bird_pos_x,
-            pos_y=bird_pos_y,
-        ))
+        return state.replace(
+            bird_state=bird_state.replace(
+                dir=next_direction,
+                pos_x=next_pos_x,
+                pos_y=next_pos_y,
+            )
+        )
 
     @partial(jax.jit, static_argnums=(0,))
-    def _egg_step(self, state: CrazyClimberState) -> CrazyClimberState: 
-        """
-        Calculates new coordinates for the egg and if new egg should be dropped
-        """   
-        def new_egg(state: CrazyClimberState) -> EggState:
-            """
-            Resets egg coordinates
-            """
+    def _egg_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        def spawn_egg(state: CrazyClimberState) -> EggState:
             direction = jnp.where(
-                state.bird_state.pos_x > (state.player_move_state.pos_x + (self.consts.BIRD_SIZE[0] / 2)),
+                state.bird_state.pos_x
+                > state.player_move_state.pos_x + self.consts.BIRD_SIZE[0] / 2,
                 -1,
-                1
+                1,
             )
 
             return state.bird_state.egg_state.replace(
@@ -1131,94 +1135,86 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 dir=direction,
             )
 
-        def check_for_collision(state: CrazyClimberState) -> bool:
-            """
-            Checks for a collision betwenn the player and the egg
-            """
+        def egg_overlaps_player(state: CrazyClimberState) -> chex.Array:
             player_x = self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x]
-    
-            # checks if x coordinates (widths of sprites) overlap
-            same_x = jnp.logical_or((((state.bird_state.egg_state.pos_x + self.consts.EGG_SIZE[1]) >= player_x) 
-                & ((state.bird_state.egg_state.pos_x + self.consts.EGG_SIZE[1]) <= (player_x + self.consts.PLAYER_SIZE[1]))), 
-                ((state.bird_state.egg_state.pos_x >= player_x)
-                & (state.bird_state.egg_state.pos_x <= (player_x + self.consts.PLAYER_SIZE[1]))))
-            
-            # checks if y coordinates (heights of sprites) overlap
-            same_y = jnp.logical_or((((state.bird_state.egg_state.pos_y + self.consts.EGG_SIZE[0]) >= self.consts.PLAYER_Y) 
-                & ((state.bird_state.egg_state.pos_y + self.consts.EGG_SIZE[0]) <= (self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[0]))), 
-                ((state.bird_state.egg_state.pos_y >= self.consts.PLAYER_Y)
-                & (state.bird_state.egg_state.pos_y <= (self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[0]))))
-            
-            return jnp.logical_and(same_x, same_y)
+            egg = state.bird_state.egg_state
 
-        @partial(jax.jit)
-        def egg_hit(state: CrazyClimberState) -> CrazyClimberState:
-            """
-            Runs logic if player got hit by egg.
-            """
-            # check if player is in safe position
-            player_safe = jnp.logical_and(
-                jnp.logical_or(state.player_move_state.main_state == PlayerStableStates.NEUTRAL,
-                    state.player_move_state.main_state == PlayerStableStates.PULL_UP),
-                jnp.logical_or(state.player_move_state.side_step < 4, 
-                    state.player_move_state.sub_step < 2))
+            egg_left = egg.pos_x
+            egg_right = egg.pos_x + self.consts.EGG_SIZE[1]
+            player_right = player_x + self.consts.PLAYER_SIZE[1]
+            overlaps_x = jnp.logical_or(
+                (egg_right >= player_x) & (egg_right <= player_right),
+                (egg_left >= player_x) & (egg_left <= player_right),
+            )
 
-            # if player not safe -> fall and deactivate bird else -> pause game and do egg breaking animation
-            new_state = state
-            new_player_state = new_state.player_move_state.replace(
-                should_fall = jnp.array(True),
-                flicker = jnp.array(False))
-            
-            next_state = jax.lax.cond(
-                player_safe,
-                lambda: break_anim(state),
-                lambda: new_state.replace(player_move_state=new_player_state))
+            egg_top = egg.pos_y
+            egg_bottom = egg.pos_y + self.consts.EGG_SIZE[0]
+            player_bottom = self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[0]
+            overlaps_y = jnp.logical_or(
+                (egg_bottom >= self.consts.PLAYER_Y)
+                & (egg_bottom <= player_bottom),
+                (egg_top >= self.consts.PLAYER_Y)
+                & (egg_top <= player_bottom),
+            )
 
-            return next_state
+            return overlaps_x & overlaps_y
 
-        def break_anim(state: CrazyClimberState) -> CrazyClimberState:
-            """
-            logic for the egg breaking animation and freezing of the game
-            """
+        def handle_egg_hit(state: CrazyClimberState) -> CrazyClimberState:
+            player_is_safe = (
+                (
+                    (state.player_move_state.main_state == PlayerStableStates.NEUTRAL)
+                    | (state.player_move_state.main_state == PlayerStableStates.PULL_UP)
+                )
+                & (
+                    (state.player_move_state.side_step < 4)
+                    | (state.player_move_state.sub_step < 2)
+                )
+            )
 
-            anim_count = jnp.array(13)
-            pause = jnp.array(True)
+            return jax.lax.cond(
+                player_is_safe,
+                start_break_animation,
+                make_player_fall,
+                state,
+            )
 
-            level_state = state.level_state.replace(pause_game=pause)
+        def make_player_fall(state: CrazyClimberState) -> CrazyClimberState:
+            return state.replace(
+                player_move_state=state.player_move_state.replace(
+                    should_fall=True,
+                    flicker=False,
+                )
+            )
 
-            egg_state = state.bird_state.egg_state.replace(egg_animation_count=
-                jnp.where(
-                    state.bird_state.egg_state.egg_animation_count == 0,
-                    anim_count,
-                    state.bird_state.egg_state.egg_animation_count
+        def start_break_animation(state: CrazyClimberState) -> CrazyClimberState:
+            egg_state = state.bird_state.egg_state
+            next_egg_state = egg_state.replace(
+                egg_animation_count=jnp.where(
+                    egg_state.egg_animation_count == 0,
+                    13,
+                    egg_state.egg_animation_count,
                 )
             )
             return state.replace(
-                level_state=level_state, 
-                bird_state=state.bird_state.replace(
-                    egg_state=egg_state
-                )
+                level_state=state.level_state.replace(pause_game=True),
+                bird_state=state.bird_state.replace(egg_state=next_egg_state),
             )
-        
-        bird_state = state.bird_state
-        egg_state = bird_state.egg_state
-
-        egg_currently_active = ((egg_state.pos_y < self.consts.EGG_BORDER_BOTTOM))
-        drop_egg = ~egg_currently_active
-
-        state = jax.lax.cond(
-            check_for_collision(state),
-            lambda: egg_hit(state),
-            lambda: state)
-
-        player_state = state.player_move_state
 
         egg_state = state.bird_state.egg_state
+        should_spawn_egg = egg_state.pos_y >= self.consts.EGG_BORDER_BOTTOM
+
+        state = jax.lax.cond(
+            egg_overlaps_player(state),
+            handle_egg_hit,
+            lambda state: state,
+            state,
+        )
 
         egg_state = jax.lax.cond(
-            drop_egg,
-            lambda: new_egg(state),
-            lambda: egg_state
+            should_spawn_egg,
+            spawn_egg,
+            lambda state: state.bird_state.egg_state,
+            state,
         )
 
         animation_active = state.level_state.pause_game
@@ -1239,27 +1235,32 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             & ~animation_active
         )
 
+        pause_increment = jnp.where(animation_active, 0, 1)
         egg_state = egg_state.replace(
             flicker=egg_flicker,
-            pos_y=egg_state.pos_y + jnp.where(state.level_state.pause_game, 0, 1),
-            pos_x=egg_state.pos_x + (
-            ((state.step_counter % egg_state.vel) == 0).astype(int) 
-            * egg_state.dir 
-            * jnp.where(state.level_state.pause_game, 0, 1)),
+            pos_y=egg_state.pos_y + pause_increment,
+            pos_x=egg_state.pos_x
+            + ((state.step_counter % egg_state.vel) == 0).astype(int)
+            * egg_state.dir
+            * pause_increment,
         )
 
         bird_state = state.bird_state.replace(
             egg_state=egg_state,
-            drop_egg=drop_egg,
+            drop_egg=should_spawn_egg,
             stop=jnp.where(
-            state.player_move_state.should_fall | state.player_move_state.falling_count == 160, 
-            jnp.array(True), 
-            state.bird_state.stop),
+                state.player_move_state.should_fall
+                | (state.player_move_state.falling_count == 160),
+                True,
+                state.bird_state.stop,
+            ),
         )
 
         return state.replace(
-            player_move_state=player_state.replace(flicker=player_flicker),
-            bird_state=bird_state
+            player_move_state=state.player_move_state.replace(
+                flicker=player_flicker,
+            ),
+            bird_state=bird_state,
         )
 
     @partial(jax.jit, static_argnums=(0,))
