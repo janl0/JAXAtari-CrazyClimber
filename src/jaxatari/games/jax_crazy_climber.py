@@ -577,8 +577,9 @@ class CrazyClimberConstants(struct.PyTreeNode):
     BIRD_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(12, 15))
     BIRD_Y: int = struct.field(pytree_node=False, default=49)
     BIRD_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default=(10, 35+BIRD_SIZE.default[1]))
-    BIRD_SPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=100) # should be 5000 for final version
+    BIRD_SPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=5000) # should be 5000 for final version
     BIRD_DESPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=7500) # should be 8500 for final version
+    BIRD_MIN_CLIMBED_FLOORS: int = struct.field(pytree_node=False, default=50)
     BIRD_POSSIBLE_STEPS: chex.Array = struct.field(
         pytree_node=False, 
         default_factory= lambda: jnp.array(
@@ -715,6 +716,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         # condor logic
         condor_activate = ((state.score >= self.consts.BIRD_SPAWN_THRESHOLD)
                 & (state.score < self.consts.BIRD_DESPAWN_THRESHOLD)
+            & (state.climbed_floors >= self.consts.BIRD_MIN_CLIMBED_FLOORS)
                 & (jnp.logical_not(level_state.condor_active))
                 & (level_state.next_enemy == Enemy.CONDOR))
         condor_deactivate = (
@@ -1125,6 +1127,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 lambda s: self.update_player_move_state(s)
             ],
             operand=player_move_state
+        )
+
+        state = state.replace(
+            lifes=jnp.where(
+                branch_idx == 0,
+                jnp.maximum(state.lifes - 1, 0),
+                state.lifes,
+            )
         )
 
         state = jax.lax.cond(
@@ -2388,9 +2398,24 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             digit_masks = self.SHAPE_MASKS["digits"]
 
             life_mask = self.SHAPE_MASKS["life"]
-            raster = self.jr.render_at(raster, 58, 12, life_mask)
-            raster = self.jr.render_at(raster, 74, 12, life_mask)
-            raster = self.jr.render_at(raster, 90, 12, life_mask)
+            raster = jax.lax.cond(
+                state.lifes >= 3,
+                lambda r: self.jr.render_at(r, 58, 12, life_mask),
+                lambda r: r,
+                raster,
+            )
+            raster = jax.lax.cond(
+                state.lifes >= 2,
+                lambda r: self.jr.render_at(r, 74, 12, life_mask),
+                lambda r: r,
+                raster,
+            )
+            raster = jax.lax.cond(
+                state.lifes >= 1,
+                lambda r: self.jr.render_at(r, 90, 12, life_mask),
+                lambda r: r,
+                raster,
+            )
             
             raster = self.jr.render_label_selective(raster, 57, 20, bonus_digits, digit_masks, start_index=0, num_to_render=5, spacing=8, max_digits_to_render=6)
             raster = self.jr.render_label_selective(raster, 49, 30, score_digits, digit_masks, start_index=0, num_to_render=6, spacing=8, max_digits_to_render=6)
