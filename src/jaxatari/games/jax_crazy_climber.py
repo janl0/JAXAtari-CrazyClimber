@@ -510,7 +510,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
     BIRD_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(12, 15))
     BIRD_Y: int = struct.field(pytree_node=False, default=49)
     BIRD_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default=(10, 35+BIRD_SIZE.default[1]))
-    BIRD_SPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=5000) # should be 5000 for final version
+    BIRD_SPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=100) # should be 5000 for final version
     BIRD_DESPAWN_THRESHOLD: int = struct.field(pytree_node=False, default=7500) # should be 8500 for final version
     BIRD_POSSIBLE_STEPS: chex.Array = struct.field(
         pytree_node=False, 
@@ -645,7 +645,11 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 & (state.score < self.consts.BIRD_DESPAWN_THRESHOLD)
                 & (jnp.logical_not(level_state.condor_active))
                 & (level_state.next_enemy == Enemy.CONDOR))
-        condor_deactivate = level_state.condor_active & ((state.score > self.consts.BIRD_DESPAWN_THRESHOLD) | state.bird_state.stop)
+        condor_deactivate = (
+            level_state.condor_active
+            & ~level_state.pause_game
+            & ((state.score > self.consts.BIRD_DESPAWN_THRESHOLD) | state.bird_state.stop)
+        )
 
         condor_active = jnp.where(
             condor_activate, 
@@ -989,7 +993,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         should_fall = jnp.any(falling_conds) | player_move_state.should_fall
         pause = state.level_state.pause_game
         action_state_cases = [
-            should_fall & (~is_falling),
+            should_fall & (~is_falling) & (~state.level_state.pause_game),
             up & (player_move_state.main_state != PlayerStableStates.PULL_UP) & (~is_falling) & can_move_up,
             down & (player_move_state.main_state == PlayerStableStates.PULL_UP) & (~is_falling),
             down & (player_move_state.main_state != PlayerStableStates.PULL_UP) & (~is_falling),
@@ -1173,18 +1177,15 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 )
             )
 
-            return jax.lax.cond(
-                player_is_safe,
-                start_break_animation,
-                make_player_fall,
-                state,
-            )
-
-        def make_player_fall(state: CrazyClimberState) -> CrazyClimberState:
+            state = start_break_animation(state)
             return state.replace(
                 player_move_state=state.player_move_state.replace(
-                    should_fall=True,
-                    flicker=False,
+                    should_fall=~player_is_safe,
+                    flicker=jnp.where(
+                        player_is_safe,
+                        state.player_move_state.flicker,
+                        False,
+                    ),
                 )
             )
 
@@ -1204,6 +1205,10 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         egg_state = state.bird_state.egg_state
         should_spawn_egg = egg_state.pos_y >= self.consts.EGG_BORDER_BOTTOM
+
+        jax.debug.print("side step {x}, \n sub step {y}", 
+                        x=state.player_move_state.side_step,
+                        y=state.player_move_state.sub_step)
 
         state = jax.lax.cond(
             egg_overlaps_player(state),
