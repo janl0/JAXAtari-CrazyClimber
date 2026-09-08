@@ -1179,6 +1179,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             state = start_break_animation(state)
             return state.replace(
+                bonus=jnp.maximum(state.bonus - 100, 0),
                 player_move_state=state.player_move_state.replace(
                     should_fall=~player_is_safe,
                     flicker=jnp.where(
@@ -1211,7 +1212,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                         y=state.player_move_state.sub_step)
 
         state = jax.lax.cond(
-            egg_overlaps_player(state),
+            egg_overlaps_player(state) & (egg_state.egg_animation_count == 0),
             handle_egg_hit,
             lambda state: state,
             state,
