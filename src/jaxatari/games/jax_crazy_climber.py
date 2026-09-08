@@ -1260,7 +1260,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
 
             egg_top = egg.pos_y
-            egg_bottom = egg.pos_y + self.consts.EGG_SIZE[0]
+            egg_bottom = egg.pos_y + self.consts.EGG_SIZE[0] - 4
             player_bottom = self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[0]
             overlaps_y = jnp.logical_or(
                 (egg_bottom >= self.consts.PLAYER_Y)
@@ -1312,10 +1312,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         egg_state = state.bird_state.egg_state
         should_spawn_egg = egg_state.pos_y >= self.consts.EGG_BORDER_BOTTOM
-
-        jax.debug.print("side step {x}, \n sub step {y}", 
-                        x=state.player_move_state.side_step,
-                        y=state.player_move_state.sub_step)
 
         state = jax.lax.cond(
             egg_overlaps_player(state) & (egg_state.egg_animation_count == 0),
@@ -1846,14 +1842,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 step=next_step,
             )
         )
-
-        #jax.debug.print(
-        #    "helicopter_state: x:{x}, y:{y}, hor_dir:{z}, vert_dir:{a}",
-        #    x=next_state.helicopter_state.pos_x,
-        #    y=next_state.helicopter_state.pos_y,
-        #    z=next_state.helicopter_state.x_dir,
-        #    a=next_state.helicopter_state.y_dir,
-        #)
 
         return next_state
 
