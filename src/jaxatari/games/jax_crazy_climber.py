@@ -136,7 +136,7 @@ class HelicopterState:
             fly_away_state=HeliFlyAwayStates.NORMAL,
             pos_x=CrazyClimberConstants.HELICOPTER_SPAWN[0],
             pos_y=CrazyClimberConstants.HELICOPTER_SPAWN[1],
-            x_dir=jnp.array(-1),
+            x_dir=jnp.array(0),
             y_dir=jnp.array(1),
             x_movement_unlocked=jnp.array(False),
             fly_away_step=jnp.array(0),
@@ -1707,7 +1707,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             return collision
 
         heli_state = state.helicopter_state
-        #TODO: needs to be adapted to work multiple times at the next level. needs to be cleared at some point (maybe when progressing to the next level)
+
+        heli_state.x_dir = jnp.where(heli_state.x_dir == 0, (-1 * state.player_move_state.hand_dir), heli_state.x_dir)
         next_step = heli_state.step + 1
 
         heli_collision = check_heli_collision(state)
