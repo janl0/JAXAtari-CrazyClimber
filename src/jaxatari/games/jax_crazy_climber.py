@@ -502,7 +502,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
     HELICOPTER_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default=(10, 35+HELICOPTER_SIZE.default[1]))
     HELICOPTER_BORDERS_X: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 110))
     HELICOPTER_BORDERS_Y: Tuple[int, int] = struct.field(pytree_node=False, default=(128,69))
-    HELICOPTER_SPAWN_HEIGHT: int = struct.field(pytree_node=False, default=20000) # TODO: Should be set to max tower height when merged, maybe rename?
+    HELICOPTER_SPAWN_HEIGHT: int = struct.field(pytree_node=False, default=16100) # TODO: Should be set to max tower height when merged, maybe rename?
     HELICOPTER_MOVEMENT_BEGIN: int = struct.field(pytree_node=False, default=116) # TODO: value is not pixel perfect yet
     HELICOPTER_MAX_STEPS: int = struct.field(pytree_node=False, default=1540) #TODO: not precise value yet
     HELICOPTER_SEQUENCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda:jnp.array([0,1,0,2]))
