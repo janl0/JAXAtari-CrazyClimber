@@ -1131,7 +1131,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
         state = state.replace(
             lifes=jnp.where(
-                branch_idx == 0,
+                player_move_state.falling_count == 1,
                 jnp.maximum(state.lifes - 1, 0),
                 state.lifes,
             )
@@ -2399,7 +2399,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
             life_mask = self.SHAPE_MASKS["life"]
             raster = jax.lax.cond(
-                state.lifes >= 3,
+                state.lifes >= 1,
                 lambda r: self.jr.render_at(r, 58, 12, life_mask),
                 lambda r: r,
                 raster,
@@ -2411,7 +2411,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 raster,
             )
             raster = jax.lax.cond(
-                state.lifes >= 1,
+                state.lifes >= 3,
                 lambda r: self.jr.render_at(r, 90, 12, life_mask),
                 lambda r: r,
                 raster,
