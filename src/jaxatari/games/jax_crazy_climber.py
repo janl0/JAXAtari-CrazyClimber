@@ -19,6 +19,7 @@ class Level(IntEnum):
     LEVEL_1 = 1
     LEVEL_2 = 2
     LEVEL_3 = 3
+    LEVEL_4 = 4
 
 class Enemy(IntEnum):
     NONE = 0
@@ -43,9 +44,10 @@ class LevelState:
     score_increment: chex.Array
     next_enemy: chex.Array
     pause_game: chex.Array
+    current_level: chex.Array
     
     @classmethod
-    def new(cls, level: Level) -> chex.dataclass:
+    def new(cls, level: chex.Array) -> chex.dataclass:
         return cls(
             condor_active = jnp.array(False),
             mad_doctor_active = jnp.array(False),
@@ -58,7 +60,8 @@ class LevelState:
                         lambda: Enemy.CONDOR
                     ]
                 )),
-            pause_game = jnp.array(False)
+            pause_game = jnp.array(False),
+            current_level = level,
         )
     
 @chex.dataclass
@@ -95,7 +98,7 @@ class TowerState:
     levels: jnp.ndarray
 
     @classmethod
-    def new(cls, key):
+    def new(cls, key, level: chex.Array):
         blind_left = jnp.zeros((11, 3))
         blind_dirs_left = jax.random.choice(key, jnp.array([0, 1]), (11, 3), p=jnp.array([0.8, 0.2]))
         windows_left = jnp.stack([blind_left, blind_dirs_left], axis=2)
@@ -107,7 +110,7 @@ class TowerState:
             spawn_probability=0.2,
             is_falling=False,
             lowest_level=0,
-            levels=CrazyClimberConstants.TOWER1
+            levels=CrazyClimberConstants.TOWERS[level - 1]
         )
 
 class HeliFlyAwayStates(IntEnum):
@@ -220,7 +223,7 @@ class CrazyClimberState(struct.PyTreeNode):
     flowerpot_enemy_state: FlowerpotEnemyState
     tower_state: TowerState
     helicopter_state: HelicopterState
-    level_state: chex.Array
+    level_state: LevelState
 
     climbed_floors: chex.Array
 
@@ -502,13 +505,11 @@ class CrazyClimberConstants(struct.PyTreeNode):
     HELICOPTER_BORDERS: Tuple[int, int] = struct.field(pytree_node=False, default=(10, 35+HELICOPTER_SIZE.default[1]))
     HELICOPTER_BORDERS_X: Tuple[int, int] = struct.field(pytree_node=False, default=(8, 110))
     HELICOPTER_BORDERS_Y: Tuple[int, int] = struct.field(pytree_node=False, default=(128,69))
-    HELICOPTER_SPAWN_HEIGHT: int = struct.field(pytree_node=False, default=16100) # TODO: Should be set to max tower height when merged, maybe rename?
+    HELICOPTER_SPAWN_HEIGHT: int = struct.field(pytree_node=False, default=161) # TODO: Should be set to max tower height when merged, maybe rename?
     HELICOPTER_MOVEMENT_BEGIN: int = struct.field(pytree_node=False, default=116) # TODO: value is not pixel perfect yet
     HELICOPTER_MAX_STEPS: int = struct.field(pytree_node=False, default=1540) #TODO: not precise value yet
     HELICOPTER_SEQUENCE: chex.Array = struct.field(pytree_node=False, default_factory=lambda:jnp.array([0,1,0,2]))
     HELICOPTER_SKIDS_SIZE: int = struct.field(pytree_node=False, default=22)
-
-    SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
 
     FLOWERPOT_SCORE_RANGES: jnp.ndarray = struct.field(
         pytree_node=False,
@@ -569,8 +570,13 @@ class CrazyClimberConstants(struct.PyTreeNode):
                 jnp.repeat(TowerLevelType.FULL, 18),
             ]
         )
+    # TODO: Tower 2 - 4 currently placeholder. needs to be changed to correct design
+    TOWER2 = jnp.repeat(TowerLevelType.FULL, 163)
+    TOWER3 = jnp.repeat(TowerLevelType.FULL, 163)
+    TOWER4 = jnp.repeat(TowerLevelType.FULL, 163)
+    TOWERS = jnp.stack([TOWER1, TOWER2, TOWER3, TOWER4])
 
-    PIXEL_MASK_ONE_ROW = PIXEL_MASK_ONE_ROW = jnp.zeros((13, 13), dtype=bool).at[-1, :].set(True).reshape(169, 1)
+    PIXEL_MASK_ONE_ROW = jnp.zeros((13, 13), dtype=bool).at[-1, :].set(True).reshape(169, 1)
     PIXEL_MASK_NOTHING = jnp.zeros((169, 1), dtype=bool)
 
 
@@ -605,6 +611,7 @@ class CrazyClimberConstants(struct.PyTreeNode):
 
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(236, 236, 236))
     SCORE_BASE_VALUE: int = struct.field(pytree_node=False, default=100)
+    BONUS_BASE_VALUE: int = struct.field(pytree_node=False, default=10000)
 
     BONUS_DECREASE_THRESHOLD: int = struct.field(pytree_node=False, default=1229)
     BONUS_DECREASE_INTERVAL: int = struct.field(pytree_node=False, default=600)
@@ -639,7 +646,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             lifes=jnp.array(5),
             reached_apex=jnp.array(False),
             player_move_state=PlayerMoveState.new(),
-            tower_state=TowerState.new(state_key),
+            tower_state=TowerState.new(state_key, 1),
 
             bird_state=BirdState.new(),
             level_state=LevelState.new(Level.LEVEL_1),
@@ -678,7 +685,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         state = self._flowerpot_collision_step(state)
         state = self._score_step(state)
         state = self._bonus_step(state)
-        state = jax.lax.cond(state.score >= self.consts.HELICOPTER_SPAWN_HEIGHT,
+        state = jax.lax.cond(state.climbed_floors >= self.consts.HELICOPTER_SPAWN_HEIGHT,
             lambda: self._helicopter_step(state),
             lambda: state,
         )
@@ -698,7 +705,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         """
         Runs the correct level step method for each level
         """
-        return self._level_1_step(state)
+        level_functions = [self._level_1_step, self._level_2_step, self._level_3_step, self._level_4_step]
+        level_index = state.level_state.current_level - 1
+        next_state = jax.lax.switch(
+            level_index,
+            level_functions,
+            operand=state,
+        )
+        return next_state
 
     @partial(jax.jit, static_argnums=(0,))
     def _level_1_step(self, state: CrazyClimberState) -> CrazyClimberState:
@@ -739,6 +753,21 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         )
 
         return state.replace(level_state=new_level_state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _level_2_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        """currently only a dummy method, runs level 1 step"""
+        return self._level_1_step(state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _level_3_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        """currently only a dummy method, runs level 1 step"""
+        return self._level_1_step(state)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _level_4_step(self, state: CrazyClimberState) -> CrazyClimberState:
+        """currently only a dummy method, runs level 1 step"""
+        return self._level_1_step(state)
 
     @partial(jax.jit, static_argnums=(0,))
     def _step_counter(self, state: CrazyClimberState) -> CrazyClimberState:
@@ -835,7 +864,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             branch_idx,
             [
                 lambda: update_tower(state.tower_state),
-                lambda: TowerState.new(state.key).replace(lowest_level=state.tower_state.lowest_level),
+                lambda: TowerState.new(state.key, state.level_state.current_level).replace(lowest_level=state.tower_state.lowest_level),
                 lambda: state.tower_state.replace(is_falling=True),
                 lambda: state.tower_state,
             ]
@@ -930,7 +959,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         @partial(jax.jit)
         def move_upwards(s: PlayerMoveState) -> PlayerMoveState:
             # is_up_move_possible = (jax.lax.abs(s.side_step) <= 3) & (s.main_state != PlayerStableStates.REACHING)
-            on_top_of_tower = state.score >= CrazyClimberConstants.HELICOPTER_SPAWN_HEIGHT
+            on_top_of_tower = state.climbed_floors >= CrazyClimberConstants.HELICOPTER_SPAWN_HEIGHT
             transitioning_states = (((s.main_state != PlayerStableStates.PULL_UP) & (s.sub_step == 4)) |
                                     ((s.main_state == PlayerStableStates.PULL_UP) & (s.sub_step == 9)))
             next_state_on_transition = jnp.array([PlayerStableStates.NEUTRAL, PlayerStableStates.HALF_PULL_UP, PlayerStableStates.PULL_UP])[(s.main_state + 1) % 3]
@@ -1144,9 +1173,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             operand=state
         )
 
-        return state.replace(
-            player_move_state=next_player_move_state,
+        next_state = jax.lax.cond(
+            state.lifes == 0,
+            lambda s: self.reset(state.key)[1],
+            lambda s: s.replace(player_move_state=next_player_move_state),
+            operand=state
         )
+
+        return next_state
 
     @partial(jax.jit, static_argnums=(0,))
     def update_player_move_state(self, s: PlayerMoveState) -> PlayerMoveState:
@@ -1755,11 +1789,18 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 fly_away_state=next_fly_away_state,
             )
 
-            return state.replace(
-                bonus=next_bonus,
-                score=next_score,
-                helicopter_state=next_helicopter_state,
+            next_state = jax.lax.cond(
+                nothing_thold,
+                lambda s: self._level_progression_step(state),
+                lambda s: state.replace(
+                    bonus=next_bonus,
+                    score=next_score,
+                    helicopter_state=next_helicopter_state,
+                ),
+                operand=state,
             )
+
+            return next_state
 
         @partial(jax.jit)
         def no_time_step(state: CrazyClimberState) -> CrazyClimberState:
@@ -1794,10 +1835,17 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 y_dir=next_y_dir,
             )
 
-            return state.replace(
-                bonus=next_bonus,
-                helicopter_state=next_helicopter_state,
+            next_state = jax.lax.cond(
+                done,
+                lambda s: self._level_progression_step(s),
+                lambda s: state.replace(
+                    bonus=next_bonus,
+                    helicopter_state=next_helicopter_state,
+                ),
+                operand=state,
             )
+
+            return next_state
 
         def check_heli_collision(state: CrazyClimberState) -> bool:
             heli_state = state.helicopter_state
@@ -1829,6 +1877,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         heli_state.x_dir = jnp.where(heli_state.x_dir == 0, (-1 * state.player_move_state.hand_dir), heli_state.x_dir)
         next_step = heli_state.step + 1
 
+        state.helicopter_state.step = next_step
+
         heli_collision = check_heli_collision(state)
         time_expired = (heli_state.step >= CrazyClimberConstants.HELICOPTER_MAX_STEPS)
         branch_idx = jnp.select(
@@ -1848,11 +1898,31 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         )
 
         next_state = next_state.replace(
-            helicopter_state=next_state.helicopter_state.replace(
-                step=next_step,
-            )
+            helicopter_state=next_state.helicopter_state
         )
 
+        return next_state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _level_progression_step(self, state: CrazyClimberState) -> CrazyClimberState:
+
+        heli_reset_state = HelicopterState.new()
+        player_reset_state = PlayerMoveState.new()
+        next_level = (state.level_state.current_level % 4) + 1
+        level_reset_state = LevelState.new(next_level)
+        tower_reset_state = TowerState.new(state.key, next_level) #TODO: do something with a new key?
+
+        bonus_reset = CrazyClimberConstants.BONUS_BASE_VALUE * next_level
+
+        next_state = state.replace(
+            helicopter_state=heli_reset_state,
+            player_move_state=player_reset_state,
+            level_state=level_reset_state,
+            tower_state=tower_reset_state,
+            climbed_floors=0,
+            bonus=bonus_reset,
+
+        )
         return next_state
 
     def render(self, state: CrazyClimberState) -> jnp.ndarray:
@@ -1951,9 +2021,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             ])
             self.EGG_SPRITES = self.SHAPE_MASKS["egg_falling"]
             self.EGG_BREAK_SPRITES = self.SHAPE_MASKS["egg_break"]
-
-            self.TOWER_SPRITE = self._generate_tower_sprite()
-            self.TOWER_CUTOUTS = self._generate_tower_cutouts()
 
             self.PLAYER_REACHING_SPRITES = jnp.array(
                 self.SHAPE_MASKS["player_reaching_group"],
@@ -2143,7 +2210,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             )
 
             row_indices = state.tower_state.lowest_level + jnp.arange(13)
-            max_level = CrazyClimberConstants.HELICOPTER_SPAWN_HEIGHT / 100
+            max_level = CrazyClimberConstants.HELICOPTER_SPAWN_HEIGHT
             valid_row_mask = row_indices < (max_level + 2) # needs to be two higher because of the unused rows at the bottom
 
             pixel_mask = jnp.repeat(valid_row_mask[::-1], 13)[:, None]
@@ -2374,7 +2441,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             helicopter_raster = self._render_helicopter(state)
             raster = self._clip_raster(raster, tower_raster, 40, 44) # self.jr.render_at_clipped(raster, 0, 0, tower_raster)
             raster = self._clip_raster(raster, player_raster, self.consts.PLAYER_POSSIBLE_X[state.player_move_state.pos_x], self.consts.PLAYER_Y) # self.jr.render_at_clipped(raster, state.player_move_state.pos_x, self.consts.PLAYER_Y, player_raster)
-            raster = jax.lax.cond(state.score >= self.consts.HELICOPTER_SPAWN_HEIGHT,
+            raster = jax.lax.cond(state.climbed_floors >= self.consts.HELICOPTER_SPAWN_HEIGHT,
                 lambda: self._clip_raster(raster, helicopter_raster, state.helicopter_state.pos_x, state.helicopter_state.pos_y),
                 lambda: raster,
             )
