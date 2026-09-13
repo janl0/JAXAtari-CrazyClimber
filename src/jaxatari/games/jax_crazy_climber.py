@@ -13,7 +13,7 @@ import jax.numpy as jnp
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 
 class Level(IntEnum):
     LEVEL_1 = 1
@@ -228,10 +228,20 @@ class CrazyClimberState(struct.PyTreeNode):
     climbed_floors: chex.Array
 
 class CrazyClimberObservation(struct.PyTreeNode):
-    pass
+    player: ObjectObservation
+    flowerpot_enemy: ObjectObservation
+    flower_pot_yellow: ObjectObservation
+    flower_pot_purple: ObjectObservation
+    flower_pot_blue: ObjectObservation
+    window_blinds: ObjectObservation
+    bird: ObjectObservation
+    egg: ObjectObservation
+    heli: ObjectObservation
+    score: jnp.ndarray
+    bonus: jnp.ndarray
 
 class CrazyClimberInfo(struct.PyTreeNode):
-    pass
+    time: jnp.ndarray
 
 def _create_block_sprite(color: tuple[int, int, int, int], shape: tuple[int, int]) -> jnp.ndarray:
     return jnp.tile(jnp.array(color, dtype=jnp.uint8), (*shape[:2], 1))
@@ -241,7 +251,6 @@ def _create_block_sprite_with_padding(color: tuple[int, int, int, int], shape: t
     sprite = jnp.tile(jnp.array(color, dtype=jnp.uint8), (*shape[:2], 1))
     padded_sprite = padded_box.at[0:shape[0], 0:shape[1]].set(sprite)
     return padded_sprite
-
 
 def _get_default_asset_config() -> tuple:
     wall_sprite = _create_block_sprite((0, 0, 148, 255), (169, 4))
@@ -1949,21 +1958,89 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             dtype=jnp.uint8
         ) 
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: CrazyClimberState) -> CrazyClimberObservation:
-        pass
+        player = ObjectObservation.create(
+            x=state.player_move_state.pos_x,
+            y=jnp.array(self.consts.PLAYER_Y),
+            width=jnp.array(self.consts.PLAYER_SIZE[1]),
+            height=jnp.array(self.consts.PLAYER_SIZE[0]),
+        )
+        flowerpot_enemy = ObjectObservation.create(
+            x=None,
+            y=None,
+            width=None,
+            height=None,
+        )
+        flower_pot_yellow = ObjectObservation.create(
+            x=None,
+            y=None,
+            width=None,
+            height=None,
+        )
+        flower_pot_purple = ObjectObservation.create(
+            x=None,
+            y=None,
+            width=None,
+            height=None,
+        )
+        flower_pot_blue = ObjectObservation.create(
+            x=None,
+            y=None,
+            width=None,
+            height=None,
+        )
+        bird = ObjectObservation.create(
+            x=state.bird_state.pos_x,
+            y=state.bird_state.pos_y,
+            width=jnp.array(self.consts.BIRD_SIZE[0]),
+            height=jnp.array(self.consts.BIRD_SIZE[1]),
+        )
+        egg = ObjectObservation.create(
+            x=state.bird_state.egg_state.pos_x,
+            y=state.bird_state.egg_state.pos_y,
+            width=jnp.array(self.consts.EGG_SIZE[0]),
+            height=jnp.array(self.consts.EGG_SIZE[1]),
+        )
+        window_blinds = ObjectObservation.create(
+            x=None,
+            y=None,
+            width=None,
+            height=None,
+        )
+        # heli =
+
+        return CrazyClimberObservation(
+            player=player,
+            flowerpot_enemy=flowerpot_enemy,
+            flower_pot_yellow=flower_pot_yellow,
+            flower_pot_purple=flower_pot_purple,
+            flower_pot_blue=flower_pot_blue,
+            bird=bird,
+            egg=egg,
+            window_blinds=window_blinds,
+            # heli=
+            score=state.score,
+            bonus=state.bonus,
+        )
     
     def obs_to_flat_array(self, obs: CrazyClimberObservation) -> jnp.ndarray:
         pass
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: CrazyClimberState) -> CrazyClimberInfo:
-        pass
+        return CrazyClimberInfo(time=state.step_counter)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: CrazyClimberState, state: CrazyClimberState) -> float:
-        return 0
+        return state.score - previous_state.score
 
+    # TODO festlegen bei welchem score vorbei ist
+    @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: CrazyClimberState) -> bool:
-        pass
+        return jnp.logical_or(
+            jnp.greater_equal(state.score, 21),
+        )
 
     class CrazyClimberRenderer(JAXGameRenderer):
         def __init__(self, consts: CrazyClimberConstants = None, config: render_utils.RendererConfig = None):
