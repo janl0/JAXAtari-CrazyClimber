@@ -734,12 +734,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     def _level_1_step(self, state: CrazyClimberState) -> CrazyClimberState:
         """
         Runs the logic for Level 1 enemy activations.
-        Enemies:
-            - Mad Doctor Round 1
-            - Condor:
-                Activation: if player between threshholds and not active
-                Deactivation: if player hit by egg; player outside thresholds; player fell in general
-            - Mad Doctor Round 2
         """
         level_state = state.level_state
 
