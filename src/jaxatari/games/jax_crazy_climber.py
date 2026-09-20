@@ -645,7 +645,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         super().__init__(self.consts)
         self.renderer = self.CrazyClimberRenderer(consts)
 
-    def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> (CrazyClimberObservation, CrazyClimberState):
+        self.SHAPE_MASKS = self.renderer.SHAPE_MASKS
+        self.FLOWERPOT_THROWER_SPRITES = self.renderer.FLOWERPOT_THROWER_SPRITES
+        self.FLOWERPOT_THROWER_BOTTOM_Y_OFFSETS = self.renderer.FLOWERPOT_THROWER_BOTTOM_Y_OFFSETS
+        self.FLOWERPOT_DROP_SPRITES = self.renderer.FLOWERPOT_DROP_SPRITES
+        self.FLOWERPOT_DROP_CENTER_X_OFFSETS = self.renderer.FLOWERPOT_DROP_CENTER_X_OFFSETS
+        self.FLOWERPOT_DROP_BOTTOM_Y_OFFSETS = self.renderer.FLOWERPOT_DROP_BOTTOM_Y_OFFSETS
+
+    def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> tuple[CrazyClimberObservation, CrazyClimberState]:
         state_key, _step_key = jax.random.split(key)
         state = CrazyClimberState(
             key=state_key,
@@ -676,7 +683,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         return initial_obs, state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: CrazyClimberState, action: chex.Array) -> (CrazyClimberObservation, CrazyClimberState, float, bool, CrazyClimberInfo):
+    def step(self, state: CrazyClimberState, action: chex.Array) -> tuple[CrazyClimberObservation, CrazyClimberState, float, bool, CrazyClimberInfo]:
         atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         previous_state = state
 
@@ -1969,6 +1976,28 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         )
 
     @partial(jax.jit, static_argnums=(0,))
+    def _get_window_screen_position(self, state: CrazyClimberState, window_row: chex.Array, window_col: chex.Array) -> tuple[chex.Array, chex.Array]:
+        window_local_x = jnp.array([4, 16, 28, 44, 56, 68], dtype=jnp.int32)[window_col]
+        window_local_y = jnp.array([5, 18, 31, 44, 57, 70, 83, 96, 109, 122, 135], dtype=jnp.int32)[window_row]
+
+        tower_scroll_offset = jax.lax.cond(
+            ~state.tower_state.is_falling,
+            lambda: self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.tower_state.tower_step],
+            lambda: self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.player_move_state.falling_count % 4],
+        )
+        top_clip = 14 - tower_scroll_offset
+
+        screen_x = 40 + window_local_x
+        screen_y = 44 + window_local_y - top_clip
+
+        return screen_x, screen_y
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_window_bottom_center(self, state: CrazyClimberState, window_row: chex.Array, window_col: chex.Array) -> tuple[chex.Array, chex.Array]:
+        window_left_x, window_top_y = self._get_window_screen_position(state, window_row, window_col)
+        return window_left_x + 4, window_top_y + 7
+
+    @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: CrazyClimberState) -> CrazyClimberObservation:
         player = ObjectObservation.create(
             x=state.player_move_state.pos_x,
@@ -2059,20 +2088,29 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         )
 
         blind_mask = state.tower_state.windows[:, :, 0] > 0
-        blind_rows, blind_cols = jnp.nonzero(blind_mask)
+        blind_rows, blind_cols = jnp.indices(blind_mask.shape)
+        blind_rows = blind_rows.ravel()
+        blind_cols = blind_cols.ravel()
         blind_xs, blind_ys = self._get_window_screen_position(
             state,
             blind_rows,
             blind_cols,
         )
+        blind_active = blind_mask.ravel().astype(jnp.int32)
         window_blinds = ObjectObservation.create(
             x=blind_xs + 1,
             y=blind_ys + 1,
             width=jnp.full(blind_xs.shape, 8, dtype=jnp.int32),
             height=jnp.full(blind_ys.shape, 8, dtype=jnp.int32),
-            active=jnp.ones(blind_xs.shape, dtype=jnp.int32),
+            active=blind_active,
         )
-        # heli =
+        heli = ObjectObservation.create(
+            x=state.helicopter_state.pos_x,
+            y=state.helicopter_state.pos_y,
+            width=jnp.array(self.consts.HELICOPTER_SIZE[1]),
+            height=jnp.array(self.consts.HELICOPTER_SIZE[0]),
+            active=jnp.where(state.helicopter_state.fly_away_state == 4, 0, 1).astype(jnp.int32),
+        )
 
         return CrazyClimberObservation(
             player=player,
@@ -2083,7 +2121,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             bird=bird,
             egg=egg,
             window_blinds=window_blinds,
-            # heli=
+            heli=heli,
             score=state.score,
             bonus=state.bonus,
         )
@@ -2101,7 +2139,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: CrazyClimberState) -> bool:
-        return jnp.greater_equal(state.score, 99.999)
+        return jnp.greater_equal(state.score, 99999)
 
     class CrazyClimberRenderer(JAXGameRenderer):
         def __init__(self, consts: CrazyClimberConstants = None, config: render_utils.RendererConfig = None):
