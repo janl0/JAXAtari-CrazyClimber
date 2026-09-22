@@ -30,6 +30,8 @@ class TowerLevelType(IntEnum):
     FULL = 0
     MIDDLE_CUT = 1
     SIDE_CUTS = 2
+    MIDDLE_4 = 3
+    MIDDLE_2 = 4
 
 class PlayerStableStates(IntEnum):
     NEUTRAL = 0
@@ -253,20 +255,61 @@ def _create_block_sprite_with_padding(color: tuple[int, int, int, int], shape: t
     return padded_sprite
 
 def _get_default_asset_config() -> tuple:
-    wall_sprite = _create_block_sprite((0, 0, 148, 255), (169, 4))
-    ceiling_sprite = _create_block_sprite((0, 48, 100, 255), (5, 80))
-    floor_sprite = _create_block_sprite((0, 0, 148, 255), (1, 80))
-    window_sprites = jnp.array([
-        _create_block_sprite_with_padding((0, 0, 148,   0), (2, 8), (8, 8)),
-        _create_block_sprite_with_padding((0, 0, 148, 255), (2, 8), (8, 8)),
-        _create_block_sprite_with_padding((0, 0, 148, 255), (3, 8), (8, 8)),
-        _create_block_sprite_with_padding((0, 0, 148, 255), (4, 8), (8, 8)),
-        _create_block_sprite_with_padding((0, 0, 148, 255), (5, 8), (8, 8)),
-        _create_block_sprite_with_padding((0, 0, 148, 255), (6, 8), (8, 8)),
-        _create_block_sprite_with_padding((0, 0, 148, 255), (8, 8), (8, 8)),
-    ])
+    wall_colors = [
+        (0, 0, 148, 255),
+        (255, 0, 255, 255),
+        (128, 0, 128, 255),
+        (0, 204, 255, 255),
+    ]
+    ceiling_colors = [
+        (0, 48, 100, 255),
+        (0, 128, 128, 255),
+        (255, 102, 0, 255),
+        (128, 0, 0, 255),
+    ]
+    floor_colors = [
+        (0, 0, 148, 255),
+        (255, 0, 255, 255),
+        (128, 0, 128, 255),
+        (0, 204, 255, 255),
+    ]
+    window_colors = [
+        (0, 0, 148, 255),
+        (255, 0, 255, 255),
+        (128, 0, 128, 255),
+        (0, 204, 255, 255),
+    ]
+    window_states = [
+        ((2, 8), (8, 8)),
+        ((2, 8), (8, 8)),
+        ((3, 8), (8, 8)),
+        ((4, 8), (8, 8)),
+        ((5, 8), (8, 8)),
+        ((6, 8), (8, 8)),
+        ((8, 8), (8, 8)),
+    ]
 
-    return (
+    procedural_assets = []
+
+    for i in range(4):
+        procedural_assets.extend([
+            {'name': f'wall_{i}', 'type': 'procedural', 'data': _create_block_sprite(wall_colors[i], (169, 4))},
+            {'name': f'ceiling_{i}', 'type': 'procedural', 'data': _create_block_sprite(ceiling_colors[i], (5, 80))},
+            {'name': f'floor_{i}', 'type': 'procedural', 'data': _create_block_sprite(floor_colors[i], (1, 80))}
+        ])
+
+        for j in range(7):
+            color = window_colors[i]
+            current_color = (color[0], color[1], color[2], 0) if j == 0 else color
+            procedural_assets.extend([
+                {
+                    'name': f'window_sprite_{i}_{j}',
+                    'type': 'procedural',
+                    'data': _create_block_sprite_with_padding(current_color, window_states[j][0], window_states[j][1])
+                }
+            ])
+
+    return tuple([
         {'name': 'background', 'type': 'background', 'file': 'misc/background.npy'},
         {'name': 'digits', 'type': 'digits', 'pattern': 'numbers/score_{}.npy'},
         {'name': 'life', 'type': 'single', 'file': 'misc/life.npy'},
@@ -437,12 +480,6 @@ def _get_default_asset_config() -> tuple:
             'flowerpot_enemy/yellow_drop/yellow_drop_37.npy',
             'flowerpot_enemy/yellow_drop/yellow_drop_38.npy',
             ]},
-
-        {'name': 'wall', 'type': 'procedural', 'data': wall_sprite},
-        {'name': 'ceiling', 'type': 'procedural', 'data': ceiling_sprite},
-        {'name': 'floor', 'type': 'procedural', 'data': floor_sprite},
-        {'name': 'window_blind_group', 'type': 'procedural', 'data': window_sprites},
-        {'name': 'ceiling', 'type': 'procedural', 'data': ceiling_sprite},
         {'name': 'helicopter_right', 'type': 'group', 'files': [
             'helicopter/right/0+2.npy',
             'helicopter/right/1.npy',
@@ -453,8 +490,6 @@ def _get_default_asset_config() -> tuple:
             'helicopter/left/1.npy',
             'helicopter/left/3.npy',
         ]},
-        {'name': 'window_blind_group', 'type': 'procedural', 'data': window_sprites},
-
         {'name': 'bird_left', 'type': 'group', 'files': [
             'bird/left/0.npy',
             'bird/left/4.npy',
@@ -489,7 +524,7 @@ def _get_default_asset_config() -> tuple:
             'egg/break/2.npy',
             'egg/break/3.npy',
         ]}
-    )
+    ] + procedural_assets)
 
 class CrazyClimberConstants(struct.PyTreeNode):
     BACKGROUND_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
@@ -580,7 +615,16 @@ class CrazyClimberConstants(struct.PyTreeNode):
             ]
         )
     # TODO: Tower 2 - 4 currently placeholder. needs to be changed to correct design
-    TOWER2 = jnp.repeat(TowerLevelType.FULL, 163)
+    TOWER2 = jnp.concat([
+        jnp.repeat(TowerLevelType.MIDDLE_CUT, 5),
+        jnp.repeat(TowerLevelType.FULL, 9),
+        jnp.repeat(TowerLevelType.MIDDLE_4, 8),
+        jnp.repeat(TowerLevelType.MIDDLE_2, 32),
+        jnp.repeat(TowerLevelType.MIDDLE_4, 4),
+        jnp.repeat(TowerLevelType.FULL, 8),
+        jnp.repeat(TowerLevelType.MIDDLE_CUT, 48),
+        jnp.repeat(TowerLevelType.FULL, 49), # TODO: placeholder for the end of the tower, needs to be correctly mapped
+    ])
     TOWER3 = jnp.repeat(TowerLevelType.FULL, 163)
     TOWER4 = jnp.repeat(TowerLevelType.FULL, 163)
     TOWERS = jnp.stack([TOWER1, TOWER2, TOWER3, TOWER4])
@@ -1931,8 +1975,8 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             tower_state=tower_reset_state,
             climbed_floors=0,
             bonus=bonus_reset,
-
         )
+
         return next_state
 
     def render(self, state: CrazyClimberState) -> jnp.ndarray:
@@ -2213,9 +2257,16 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 self.FLOWERPOT_DROP_SPRITES
             )
 
-            self.TOWER_SPRITE = self._generate_tower_sprite()
-            self.TOWER_CUTOUTS = self._generate_tower_cutouts()
+            self.WALL_SPRITES = jnp.stack([self.SHAPE_MASKS[f"wall_{i}"] for i in range(4)], axis=0)
+            self.CEILING_SPRITES = jnp.stack([self.SHAPE_MASKS[f"ceiling_{i}"] for i in range(4)], axis=0)
+            self.FLOOR_SPRITES = jnp.stack([self.SHAPE_MASKS[f"floor_{i}"] for i in range(4)], axis=0)
+            self.WINDOW_BLIND_SPRITES = jnp.stack([
+                jnp.stack([self.SHAPE_MASKS[f"window_sprite_{i}_{j}"] for j in range(7)], axis=0)
+                for i in range(4)
+            ], axis=0)
 
+            self.TOWER_SPRITES = self._generate_tower_sprites()
+            self.TOWER_CUTOUTS = self._generate_tower_cutouts()
 
         def _get_visible_sprite_anchors(self, sprites: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
             visible = sprites != self.jr.TRANSPARENT_ID
@@ -2234,14 +2285,25 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             level_full = floor_raster
             level_middle_cut = level_full.at[:, 28:52].set(0)
             level_side_cuts = level_full.at[:, 4:24].set(0).at[:, 56:76].set(0)
-            return jnp.array([level_full, level_middle_cut, level_side_cuts])
+            level_middle_4 = level_full #TODO: make correct
+            level_middle_2 = level_full #TODO: make correct
+            return jnp.array([level_full, level_middle_cut, level_side_cuts, level_middle_4, level_middle_2])
             
-        def _generate_tower_sprite(self) -> jnp.ndarray:
+        def _generate_tower_sprites(self) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+            tower_rasters = (
+                self._generate_tower_sprite(0),
+                self._generate_tower_sprite(1),
+                self._generate_tower_sprite(2),
+                self._generate_tower_sprite(3),
+            )
+            return jnp.stack(tower_rasters, axis=0)
+
+        def _generate_tower_sprite(self, level_index:int) -> jnp.ndarray:
             tower_raster = self._create_raster((170, 80))
 
             wall_offset_x = jnp.array([0, 12, 24, 36, 40, 52, 64, 76])
             wall_offset_y = jnp.repeat(0, 8)
-            wall_sprite = self.SHAPE_MASKS["wall"]
+            wall_sprite = self.WALL_SPRITES[level_index]
             wall_sprite_masks = jnp.repeat(wall_sprite[jnp.newaxis, :, :], 8, axis=0)
             tower_raster = self.jr.render_at_batch(
                 tower_raster,
@@ -2249,10 +2311,9 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 wall_offset_y,
                 wall_sprite_masks,
             )
-            
             ceiling_offset_x = jnp.repeat(0, 13)
             ceiling_offset_y = jnp.array([0, 13, 26, 39, 52, 65, 78, 91, 104, 117, 130, 143, 156])
-            ceiling_sprite = self.SHAPE_MASKS["ceiling"]
+            ceiling_sprite = self.CEILING_SPRITES[level_index]
             ceiling_sprite_masks = jnp.repeat(ceiling_sprite[jnp.newaxis, :, :], 13, axis=0)
             tower_raster = self.jr.render_at_batch(
                 tower_raster,
@@ -2260,8 +2321,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
                 ceiling_offset_y,
                 ceiling_sprite_masks,
             )
-
-            floor_sprite = self.SHAPE_MASKS["floor"]
+            floor_sprite = self.FLOOR_SPRITES[level_index]
             tower_raster = self.jr.render_at(tower_raster, 0, 169, floor_sprite)
 
             return tower_raster
@@ -2340,10 +2400,12 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             
             batched_clip_tower_cut = jax.vmap(clip_tower_cut, in_axes=(None, None, 0, 0))
 
-            tower_raster = jnp.copy(self.TOWER_SPRITE)
+            tower_index = state.level_state.current_level - 1
+            current_state_tower = self.TOWER_SPRITES[tower_index]
+            tower_raster = jnp.copy(current_state_tower)
             window_offset_x = jnp.tile(jnp.array([4, 16, 28, 44, 56, 68]), 11)
             window_offset_y = jnp.repeat(jnp.array([5, 18, 31, 44, 57, 70, 83, 96, 109, 122, 135]), 6)
-            sprites = self.SHAPE_MASKS["window_blind_group"][state.tower_state.windows[:, :, 0].astype(jnp.int32)]
+            sprites = self.WINDOW_BLIND_SPRITES[tower_index][state.tower_state.windows[:, :, 0].astype(jnp.int32)]
             sprites = jnp.reshape(sprites, (-1, *sprites.shape[2:]))
             tower_sprite = self.jr.render_at_batch(tower_raster, window_offset_x, window_offset_y, sprites)
 
@@ -2356,7 +2418,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
             level_offset_y = jnp.array([1, 14, 27, 40, 53, 66, 79, 92, 105, 118, 131, 144, 157])
             tower_sprite = jnp.concat(batched_clip_tower_cut(tower_sprite, self.TOWER_CUTOUTS, level_offset_y, level_indices[::-1]), axis=0)
 
-            falling_tower_raster = jnp.copy(self.TOWER_SPRITE)
+            falling_tower_raster = jnp.copy(current_state_tower)
             falling_tower_sprite = jnp.concat(
                 batched_clip_tower_cut(
                     falling_tower_raster, 
