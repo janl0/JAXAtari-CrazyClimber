@@ -13,7 +13,7 @@ import jax.numpy as jnp
 import jaxatari.spaces as spaces
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
-from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action
+from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 
 class Level(IntEnum):
     LEVEL_1 = 1
@@ -228,10 +228,20 @@ class CrazyClimberState(struct.PyTreeNode):
     climbed_floors: chex.Array
 
 class CrazyClimberObservation(struct.PyTreeNode):
-    pass
+    player: ObjectObservation
+    flowerpot_enemy: ObjectObservation
+    flower_pot_yellow: ObjectObservation
+    flower_pot_purple: ObjectObservation
+    flower_pot_blue: ObjectObservation
+    window_blinds: ObjectObservation
+    bird: ObjectObservation
+    egg: ObjectObservation
+    heli: ObjectObservation
+    score: jnp.ndarray
+    bonus: jnp.ndarray
 
 class CrazyClimberInfo(struct.PyTreeNode):
-    pass
+    time: jnp.ndarray
 
 def _create_block_sprite(color: tuple[int, int, int, int], shape: tuple[int, int]) -> jnp.ndarray:
     return jnp.tile(jnp.array(color, dtype=jnp.uint8), (*shape[:2], 1))
@@ -241,7 +251,6 @@ def _create_block_sprite_with_padding(color: tuple[int, int, int, int], shape: t
     sprite = jnp.tile(jnp.array(color, dtype=jnp.uint8), (*shape[:2], 1))
     padded_sprite = padded_box.at[0:shape[0], 0:shape[1]].set(sprite)
     return padded_sprite
-
 
 def _get_default_asset_config() -> tuple:
     wall_sprite = _create_block_sprite((0, 0, 148, 255), (169, 4))
@@ -636,7 +645,14 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         super().__init__(self.consts)
         self.renderer = self.CrazyClimberRenderer(consts)
 
-    def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> (CrazyClimberObservation, CrazyClimberState):
+        self.SHAPE_MASKS = self.renderer.SHAPE_MASKS
+        self.FLOWERPOT_THROWER_SPRITES = self.renderer.FLOWERPOT_THROWER_SPRITES
+        self.FLOWERPOT_THROWER_BOTTOM_Y_OFFSETS = self.renderer.FLOWERPOT_THROWER_BOTTOM_Y_OFFSETS
+        self.FLOWERPOT_DROP_SPRITES = self.renderer.FLOWERPOT_DROP_SPRITES
+        self.FLOWERPOT_DROP_CENTER_X_OFFSETS = self.renderer.FLOWERPOT_DROP_CENTER_X_OFFSETS
+        self.FLOWERPOT_DROP_BOTTOM_Y_OFFSETS = self.renderer.FLOWERPOT_DROP_BOTTOM_Y_OFFSETS
+
+    def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> tuple[CrazyClimberObservation, CrazyClimberState]:
         state_key, _step_key = jax.random.split(key)
         state = CrazyClimberState(
             key=state_key,
@@ -667,7 +683,7 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
         return initial_obs, state
 
     @partial(jax.jit, static_argnums=(0,))
-    def step(self, state: CrazyClimberState, action: chex.Array) -> (CrazyClimberObservation, CrazyClimberState, float, bool, CrazyClimberInfo):
+    def step(self, state: CrazyClimberState, action: chex.Array) -> tuple[CrazyClimberObservation, CrazyClimberState, float, bool, CrazyClimberInfo]:
         atari_action = jnp.take(self.ACTION_SET, action.astype(jnp.int32))
         previous_state = state
 
@@ -718,12 +734,6 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     def _level_1_step(self, state: CrazyClimberState) -> CrazyClimberState:
         """
         Runs the logic for Level 1 enemy activations.
-        Enemies:
-            - Mad Doctor Round 1
-            - Condor:
-                Activation: if player between threshholds and not active
-                Deactivation: if player hit by egg; player outside thresholds; player fell in general
-            - Mad Doctor Round 2
         """
         level_state = state.level_state
 
@@ -1928,42 +1938,202 @@ class JaxCrazyClimber(JaxEnvironment[CrazyClimberState, CrazyClimberObservation,
     def render(self, state: CrazyClimberState) -> jnp.ndarray:
         return self.renderer.render(state)
 
-    # TODO: Returntype needs to be altered to match actual implementation
     def action_space(self) -> spaces.Discrete:
-        pass
+        return spaces.Discrete(len(self.ACTION_SET))
 
-    # TODO: Returntype needs to be altered to match actual implementation
     def observation_space(self) -> spaces.Dict:
-        object_space = spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
+        object_space = spaces.get_object_space(
+            n=None,
+            screen_size=(self.consts.HEIGHT, self.consts.WIDTH),
+            xy_low=-1,
+        )
 
         return spaces.Dict({
-            "player": spaces.Box(low=0, high=21, shape=(), dtype=jnp.int32),
+            "player": object_space,
+            "flowerpot_enemy": object_space,
+            "flower_pot_yellow": object_space,
+            "flower_pot_purple": object_space,
+            "flower_pot_blue": object_space,
+            "bird": object_space,
+            "egg": object_space,
+            "window_blinds": object_space,
+            "score": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
+            "bonus": spaces.Box(low=0, high=999999, shape=(), dtype=jnp.int32),
         })
 
-    # TODO: Returntype needs to be altered to match actual implementation
     def image_space(self) -> spaces.Box:
         return spaces.Box(
             low=0,
             high=255,
-            shape=(210, 160, 3),
-            dtype=jnp.uint8
-        ) 
+            shape=(self.consts.HEIGHT, self.consts.WIDTH, 3),
+            dtype=jnp.uint8,
+        )
 
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_window_screen_position(self, state: CrazyClimberState, window_row: chex.Array, window_col: chex.Array) -> tuple[chex.Array, chex.Array]:
+        window_local_x = jnp.array([4, 16, 28, 44, 56, 68], dtype=jnp.int32)[window_col]
+        window_local_y = jnp.array([5, 18, 31, 44, 57, 70, 83, 96, 109, 122, 135], dtype=jnp.int32)[window_row]
+
+        tower_scroll_offset = jax.lax.cond(
+            ~state.tower_state.is_falling,
+            lambda: self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.tower_state.tower_step],
+            lambda: self.consts.TOWER_POSSIBLE_SPRITE_CLIP[state.player_move_state.falling_count % 4],
+        )
+        top_clip = 14 - tower_scroll_offset
+
+        screen_x = 40 + window_local_x
+        screen_y = 44 + window_local_y - top_clip
+
+        return screen_x, screen_y
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_window_bottom_center(self, state: CrazyClimberState, window_row: chex.Array, window_col: chex.Array) -> tuple[chex.Array, chex.Array]:
+        window_left_x, window_top_y = self._get_window_screen_position(state, window_row, window_col)
+        return window_left_x + 4, window_top_y + 7
+
+    @partial(jax.jit, static_argnums=(0,))
     def _get_observation(self, state: CrazyClimberState) -> CrazyClimberObservation:
-        pass
+        player = ObjectObservation.create(
+            x=state.player_move_state.pos_x,
+            y=jnp.array(self.consts.PLAYER_Y),
+            width=jnp.array(self.consts.PLAYER_SIZE[1]),
+            height=jnp.array(self.consts.PLAYER_SIZE[0]),
+        )
+
+        flowerpot_active = state.flowerpot_enemy_state.active
+        flowerpot_window_x, flowerpot_window_y = self._get_window_screen_position(
+            state,
+            state.flowerpot_enemy_state.window_row,
+            state.flowerpot_enemy_state.window_col,
+        )
+        flowerpot_enemy = ObjectObservation.create(
+            x=jnp.where(flowerpot_active, flowerpot_window_x + 2, jnp.array(-1, dtype=jnp.int32)),
+            y=jnp.where(flowerpot_active, flowerpot_window_y + 6, jnp.array(-1, dtype=jnp.int32)),
+            width=jnp.where(flowerpot_active, jnp.array(11, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32)),
+            height=jnp.where(flowerpot_active, jnp.array(17, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32)),
+            active=flowerpot_active.astype(jnp.int32),
+        )
+
+        phase_steps = jnp.maximum(state.flowerpot_enemy_state.phase_steps, 0)
+        drop_type = state.flowerpot_enemy_state.drop_type
+        drop_visible = flowerpot_active & (state.flowerpot_enemy_state.phase == 1)
+
+        first_cycle_offsets = jnp.array(
+            [0, 0, 0, 0, 0, 0, 0, 1, 2, 4, 4, 5, 6, 7, 8, 10, 13, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23],
+            dtype=jnp.int32,
+        )
+        loop_offsets = jnp.array(
+            [0, 0, 1, 2, 4, 4, 5, 6, 7, 8, 10, 13, 13, 14, 15, 17, 18, 19, 20, 21, 22, 23],
+            dtype=jnp.int32,
+        )
+        y_offset = jnp.where(
+            phase_steps < 27,
+            first_cycle_offsets[jnp.minimum(phase_steps, 26)],
+            23 + ((phase_steps - 27) // 22) * 23 + loop_offsets[(phase_steps - 27) % 22],
+        )
+
+        window_center_x, _ = self._get_window_bottom_center(
+            state,
+            state.flowerpot_enemy_state.window_row,
+            state.flowerpot_enemy_state.window_col,
+        )
+        _, window_top_y = self._get_window_screen_position(
+            state,
+            state.flowerpot_enemy_state.window_row,
+            state.flowerpot_enemy_state.window_col,
+        )
+        thrower_y_offsets = jnp.array([6, 5, 3, 2, 1], dtype=jnp.int32)
+        thrower_bottom_y = (
+            window_top_y + thrower_y_offsets[4] + self.FLOWERPOT_THROWER_BOTTOM_Y_OFFSETS[4]
+        )
+        drop_sprite_idx = jnp.where(
+            phase_steps < 5,
+            phase_steps,
+            5 + ((phase_steps - 5) % self.consts.FLOWERPOT_DROP_LOOP_LENGTHS[drop_type]),
+        )
+        drop_sprite_idx = self.consts.FLOWERPOT_DROP_SPRITE_OFFSETS[drop_type] + drop_sprite_idx
+        drop_x = window_center_x + state.flowerpot_enemy_state.drop_x_offset - self.FLOWERPOT_DROP_CENTER_X_OFFSETS[drop_sprite_idx]
+        drop_y = thrower_bottom_y + 4 + y_offset
+
+        def _make_drop_observation(active: chex.Array) -> ObjectObservation:
+            return ObjectObservation.create(
+                x=jnp.where(active, drop_x, jnp.array(-1, dtype=jnp.int32)),
+                y=jnp.where(active, drop_y, jnp.array(-1, dtype=jnp.int32)),
+                width=jnp.where(active, jnp.array(7, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32)),
+                height=jnp.where(active, jnp.array(12, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32)),
+                active=active.astype(jnp.int32),
+            )
+
+        flower_pot_yellow = _make_drop_observation(drop_visible & (drop_type == 2))
+        flower_pot_purple = _make_drop_observation(drop_visible & (drop_type == 1))
+        flower_pot_blue = _make_drop_observation(drop_visible & (drop_type == 0))
+
+        bird = ObjectObservation.create(
+            x=state.bird_state.pos_x,
+            y=state.bird_state.pos_y,
+            width=jnp.array(self.consts.BIRD_SIZE[0]),
+            height=jnp.array(self.consts.BIRD_SIZE[1]),
+        )
+        egg = ObjectObservation.create(
+            x=state.bird_state.egg_state.pos_x,
+            y=state.bird_state.egg_state.pos_y,
+            width=jnp.array(self.consts.EGG_SIZE[0]),
+            height=jnp.array(self.consts.EGG_SIZE[1]),
+        )
+
+        blind_mask = state.tower_state.windows[:, :, 0] > 0
+        blind_rows, blind_cols = jnp.indices(blind_mask.shape)
+        blind_rows = blind_rows.ravel()
+        blind_cols = blind_cols.ravel()
+        blind_xs, blind_ys = self._get_window_screen_position(
+            state,
+            blind_rows,
+            blind_cols,
+        )
+        blind_active = blind_mask.ravel().astype(jnp.int32)
+        window_blinds = ObjectObservation.create(
+            x=blind_xs + 1,
+            y=blind_ys + 1,
+            width=jnp.full(blind_xs.shape, 8, dtype=jnp.int32),
+            height=jnp.full(blind_ys.shape, 8, dtype=jnp.int32),
+            active=blind_active,
+        )
+        heli = ObjectObservation.create(
+            x=state.helicopter_state.pos_x,
+            y=state.helicopter_state.pos_y,
+            width=jnp.array(self.consts.HELICOPTER_SIZE[1]),
+            height=jnp.array(self.consts.HELICOPTER_SIZE[0]),
+            active=jnp.where(state.helicopter_state.fly_away_state == 4, 0, 1).astype(jnp.int32),
+        )
+
+        return CrazyClimberObservation(
+            player=player,
+            flowerpot_enemy=flowerpot_enemy,
+            flower_pot_yellow=flower_pot_yellow,
+            flower_pot_purple=flower_pot_purple,
+            flower_pot_blue=flower_pot_blue,
+            bird=bird,
+            egg=egg,
+            window_blinds=window_blinds,
+            heli=heli,
+            score=state.score,
+            bonus=state.bonus,
+        )
     
     def obs_to_flat_array(self, obs: CrazyClimberObservation) -> jnp.ndarray:
         pass
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_info(self, state: CrazyClimberState) -> CrazyClimberInfo:
-        pass
+        return CrazyClimberInfo(time=state.step_counter)
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_reward(self, previous_state: CrazyClimberState, state: CrazyClimberState) -> float:
-        return 0
+        return state.score - previous_state.score
 
+    @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: CrazyClimberState) -> bool:
-        pass
+        return jnp.greater_equal(state.score, 99999)
 
     class CrazyClimberRenderer(JAXGameRenderer):
         def __init__(self, consts: CrazyClimberConstants = None, config: render_utils.RendererConfig = None):
